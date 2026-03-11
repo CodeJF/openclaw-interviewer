@@ -8,6 +8,5 @@ cp "$SRC" "$DST"
 launchctl bootout "gui/$UID/com.hichs.interviewer-recruiter-pipeline" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$UID" "$DST"
 launchctl enable "gui/$UID/com.hichs.interviewer-recruiter-pipeline"
-launchctl kickstart -k "gui/$UID/com.hichs.interviewer-recruiter-pipeline" >/dev/null 2>&1 || true
 echo "Installed launchd job: com.hichs.interviewer-recruiter-pipeline"
 launchctl print "gui/$UID/com.hichs.interviewer-recruiter-pipeline" | head -40 || true

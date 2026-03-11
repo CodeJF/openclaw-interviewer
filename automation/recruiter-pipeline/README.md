@@ -41,7 +41,7 @@ The launcher automatically creates `automation/recruiter-pipeline/.venv` and ins
 bash automation/recruiter-pipeline/install_launchd.sh
 ```
 
-This installs `com.hichs.interviewer-recruiter-pipeline` under `~/Library/LaunchAgents/` and schedules it for 08:50 Asia/Shanghai (your Mac local time).
+This installs `com.hichs.interviewer-recruiter-pipeline` under `~/Library/LaunchAgents/` and schedules it for 08:50 Asia/Shanghai (your Mac local time). It does **not** force an immediate run.
 
 ## Runtime outputs
 

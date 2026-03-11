@@ -1,0 +1,7 @@
+# Local runtime state for recruiter pipeline
+automation/recruiter-pipeline/runtime/
+automation/recruiter-pipeline/config.local.json
+automation/recruiter-pipeline/.venv/
+__pycache__/
+*.pyc
+.DS_Store

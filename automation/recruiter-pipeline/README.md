@@ -5,7 +5,7 @@
 1. IMAP 拉取未读邮件
 2. 读取后立刻标记为已读，并验证 `\\Seen` 是否生效
 3. 提取附件（PDF / ZIP / TXT / MD）
-4. 规则/关键词预筛，先缩小候选 JD 范围
+4. 基于岗位画像的规则预筛（must/bonus/negative + 年限），先缩小候选 JD 范围
 5. 只把预筛后的 JD 集合交给 `interviewer` agent 做精筛
 6. 解析结果写入 `runtime/cache/parsed/`，重跑时复用，减少重复 PDF 提取
 7. 简历与 JD 内容会先裁剪再送模型，降低单次推理耗时

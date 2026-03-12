@@ -232,7 +232,6 @@ def main() -> int:
         metrics['durationsMs']['total'] = round((time.perf_counter() - t0) * 1000, 2)
         dump_json(dirs['reports'] / 'last-run-metrics.json', metrics)
         print(msg)
-        print(zip_path)
     else:
         msg = f'''📊 简历筛选完成
 

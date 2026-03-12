@@ -96,19 +96,31 @@ def score_jd_match(text: str, years: int | None, profile: dict[str, Any]) -> tup
     bonus_score, bonus_hits = count_hits(text, profile.get('bonus', []))
     negative_score, negative_hits = count_hits(text, profile.get('negative', []))
 
-    score += must_score * 15
-    score += bonus_score * 5
-    score -= negative_score * 10
+    score += must_score * 18
+    score += bonus_score * 4
+    score -= negative_score * 15
+
+    # 如果一个 must 都没命中，说明岗位方向就已经偏了，直接大幅压分
+    if must_score == 0:
+        score -= 20
+    elif must_score == 1:
+        score -= 5
+
+    # 负向词命中较多时，进一步压分，避免“看起来沾边但方向明显不对”的简历进 LLM
+    if negative_score >= 2:
+        score -= 15
 
     min_years = profile.get('min_years')
     max_years = profile.get('max_years')
     if years is not None:
         if min_years is not None and years >= min_years:
-            score += 10
+            score += 8
         elif min_years is not None:
-            score -= 8
+            score -= 12
         if max_years is not None and years <= max_years:
-            score += 3
+            score += 2
+        elif max_years is not None:
+            score -= 6
 
     details['must_hits'] = must_hits
     details['bonus_hits'] = bonus_hits

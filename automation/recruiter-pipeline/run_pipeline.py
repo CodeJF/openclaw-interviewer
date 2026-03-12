@@ -113,7 +113,7 @@ def connect_imap(cfg: dict[str, Any]):
     return client
 
 
-def fetch_unseen_messages(client: imaplib.IMAP4, processed_uids: set[str], max_emails: int | None = None) -> list[tuple[str, Message]]:
+def fetch_unseen_messages(client: imaplib.IMAP4, max_emails: int | None = None) -> list[tuple[str, Message]]:
     status, _ = client.select('INBOX')
     if status != 'OK':
         raise PipelineError('Unable to select INBOX')
@@ -126,8 +126,6 @@ def fetch_unseen_messages(client: imaplib.IMAP4, processed_uids: set[str], max_e
         uids = uids[:max_emails]
     messages = []
     for uid in uids:
-        if uid in processed_uids:
-            continue
         status, parts = client.uid('fetch', uid, '(RFC822)')
         if status != 'OK' or not parts or not parts[0]:
             continue
@@ -549,7 +547,7 @@ def main() -> int:
     newly_processed: list[str] = []
     messages: list[tuple[str, Message]] = []
     try:
-        messages = fetch_unseen_messages(client, processed_uids, max_emails=max_emails)
+        messages = fetch_unseen_messages(client, max_emails=max_emails)
 
         # Prepare arguments for parallel processing
         task_args = [
@@ -592,7 +590,7 @@ def main() -> int:
         status, data = client.uid('search', None, 'UNSEEN')
         if status == 'OK':
             all_unseen = set(u.decode() for u in data[0].split() if u)
-            remaining_unread = len(all_unseen - processed_uid_set)
+            remaining_unread = len(all_unseen)
         else:
             remaining_unread = -1
         client.logout()

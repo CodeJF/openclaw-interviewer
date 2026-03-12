@@ -212,19 +212,17 @@ def main() -> int:
         msg = f'''📊 简历筛选完成
 
 ✅ 本次处理：{len(messages)} 封
-📬 剩余未读：{remaining_unread} 封
 🎯 筛选通过：{len(results)} 人
 ⏭️ 预筛跳过 LLM：{skipped_by_prefilter} 封
+📬 剩余未读：{remaining_unread} 封
 
-📨 本次读取名单：
-{processed_mail_list}
-
-📋 通过名单：
-{candidate_list}
+已附上：
+- Excel 报告（查看详细名单、联系方式、摘要与建议）
+- ZIP 资源包（查看原始附件与归档材料）
 
 {summary}{seen_failure_text}
 
-是否需要继续处理？'''
+如需继续处理下一批，请继续触发。'''
         if not args.dry_run:
             t6 = time.perf_counter()
             text_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], msg)
@@ -246,15 +244,12 @@ def main() -> int:
         msg = f'''📊 简历筛选完成
 
 ✅ 本次处理：{len(messages)} 封
-📬 剩余未读：{remaining_unread} 封
 ⏭️ 预筛跳过 LLM：{skipped_by_prefilter} 封
+📬 剩余未读：{remaining_unread} 封
 
-📨 本次读取名单：
-{processed_mail_list}
+本轮没有评分在 80 分以上的候选人。{seen_failure_text}
 
-本次处理中没有评分在 80 分以上的候选人。{seen_failure_text}
-
-是否需要继续处理？'''
+如需继续处理下一批，请继续触发。'''
         if not args.dry_run:
             t6 = time.perf_counter()
             text_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], msg)

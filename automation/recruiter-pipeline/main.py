@@ -106,7 +106,10 @@ def main() -> int:
             save_state(state_path, state)
 
         with ThreadPoolExecutor(max_workers=parse_jobs) as executor:
-            futures = {executor.submit(parse_mail_item, item.uid, item.message, dirs['incoming']): item.uid for item in messages}
+            futures = {
+                executor.submit(parse_mail_item, item.uid, item.message, dirs['incoming'], dirs['cache'] / 'parsed'):
+                item.uid for item in messages
+            }
             for future in as_completed(futures):
                 candidate = future.result()
                 if candidate is not None:

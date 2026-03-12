@@ -17,6 +17,7 @@
     "maxEmailsPerRun": 10,
     "parallelParseJobs": 4,
     "parallelLLMJobs": 1,
+    "maxCandidateCharsForReview": 12000,
     "onlyUseModel": "MiniMax-M2.5-highspeed",
     "allowFallback": false,
     "scoreBands": [

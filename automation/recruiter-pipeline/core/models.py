@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Any
 
 
+MAX_REVIEW_CHARS = 12000
+
+
 class PipelineError(RuntimeError):
     pass
 

@@ -7,8 +7,10 @@
 3. 提取附件（PDF / ZIP / TXT / MD）
 4. 规则/关键词预筛，先缩小候选 JD 范围
 5. 只把预筛后的 JD 集合交给 `interviewer` agent 做精筛
-6. 仅接受 `MiniMax-M2.5-highspeed` 结果，拒绝 OpenAI Codex fallback
-7. 通过 `openclaw message send` 发送飞书文本和 zip 结果
+6. 解析结果写入 `runtime/cache/parsed/`，重跑时复用，减少重复 PDF 提取
+7. 简历与 JD 内容会先裁剪再送模型，降低单次推理耗时
+8. 仅接受 `MiniMax-M2.5-highspeed` 结果，拒绝 OpenAI Codex fallback
+9. 通过 `openclaw message send` 发送飞书文本和 zip 结果
 
 ## Why
 

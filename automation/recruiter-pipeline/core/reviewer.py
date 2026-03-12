@@ -9,10 +9,17 @@ from typing import Any
 from .models import JDEntry, ParsedCandidate, PipelineError
 
 
+def trim_jd_content(content: str, limit: int = 2500) -> str:
+    normalized = '\n'.join(line.strip() for line in content.splitlines() if line.strip())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit] + '\n...[JD内容已截断以提速]'
+
+
 def build_prompt(candidate: ParsedCandidate, jds: list[JDEntry], prefilter_meta: dict[str, Any]) -> str:
     jd_block = []
     for jd in jds:
-        jd_block.append(f'# JD: {jd.title}\n{jd.content}')
+        jd_block.append(f'# JD: {jd.title}\n{trim_jd_content(jd.content)}')
     jd_text = '\n\n'.join(jd_block)
     schema = {
         'candidate_name': 'string',
@@ -33,10 +40,11 @@ def build_prompt(candidate: ParsedCandidate, jds: list[JDEntry], prefilter_meta:
 
         要求：
         1. 只能从给定 JD 中选择一个最匹配岗位。
-        2. 分数范围 0-99。
-        3. 80-89 代表较强匹配，90-99 代表高匹配。
-        4. 如果不匹配任何岗位，也要选出最接近的一个岗位，但分数可以低于 80。
-        5. 只输出 JSON，不要输出 markdown、解释或代码块。
+        2. 优先参考预筛给出的 top_jds，除非候选人材料明确显示另一个 JD 更合适。
+        3. 分数范围 0-99。
+        4. 80-89 代表较强匹配，90-99 代表高匹配。
+        5. 如果不匹配任何岗位，也要选出最接近的一个岗位，但分数可以低于 80。
+        6. 只输出 JSON，不要输出 markdown、解释或代码块。
 
         JSON schema:
         {json.dumps(schema, ensure_ascii=False)}

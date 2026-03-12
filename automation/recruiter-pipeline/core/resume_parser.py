@@ -4,9 +4,9 @@ import email.utils
 from email.message import Message
 from pathlib import Path
 
-from .common import decode_text, sanitize_filename
+from .common import decode_text, dump_json, load_json, sanitize_filename
 from .io_ops import maybe_extract_zip
-from .models import ParsedCandidate, PipelineError
+from .models import MAX_REVIEW_CHARS, ParsedCandidate, PipelineError
 
 
 def extract_attachments(msg: Message, target_dir: Path) -> list[Path]:
@@ -64,7 +64,16 @@ def extract_sender_name(sender: str) -> str:
     return sanitize_filename(candidate, 'unknown-candidate')
 
 
-def parse_mail_item(uid: str, msg: Message, incoming_dir: Path) -> ParsedCandidate | None:
+def compress_candidate_text(text: str, limit: int = MAX_REVIEW_CHARS) -> str:
+    normalized = '\n'.join(line.strip() for line in text.splitlines() if line.strip())
+    if len(normalized) <= limit:
+        return normalized
+    head = normalized[: int(limit * 0.7)]
+    tail = normalized[-int(limit * 0.3):]
+    return head + '\n\n[...内容过长，已截断中间部分以提速...]\n\n' + tail
+
+
+def parse_mail_item(uid: str, msg: Message, incoming_dir: Path, cache_dir: Path | None = None) -> ParsedCandidate | None:
     subject = decode_text(msg.get('subject')) or '(no subject)'
     sender = decode_text(msg.get('from')) or '(unknown sender)'
     candidate_name = extract_sender_name(sender)
@@ -74,6 +83,26 @@ def parse_mail_item(uid: str, msg: Message, incoming_dir: Path) -> ParsedCandida
     extracted_dir = mail_dir / 'extracted'
     raw_dir.mkdir(parents=True, exist_ok=True)
     extracted_dir.mkdir(parents=True, exist_ok=True)
+
+    cache_path = (cache_dir / f'{uid}.json') if cache_dir else None
+    if cache_path and cache_path.exists():
+        cached = load_json(cache_path)
+        attachments = [Path(p) for p in cached.get('attachments', [])]
+        all_files = [Path(p) for p in cached.get('all_files', [])]
+        candidate_text = str(cached.get('candidate_text') or '')
+        documents = list(cached.get('documents', []))
+        if candidate_text:
+            return ParsedCandidate(
+                uid=uid,
+                sender=sender,
+                subject=subject,
+                candidate_name=candidate_name,
+                mail_dir=mail_dir,
+                attachments=attachments,
+                all_files=all_files,
+                candidate_text=candidate_text,
+                documents=documents,
+            )
 
     attachments = extract_attachments(msg, raw_dir)
     if not attachments:
@@ -90,6 +119,16 @@ def parse_mail_item(uid: str, msg: Message, incoming_dir: Path) -> ParsedCandida
     candidate_text, documents = gather_candidate_text(all_files)
     if not candidate_text:
         return None
+    candidate_text = compress_candidate_text(candidate_text)
+
+    if cache_path:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        dump_json(cache_path, {
+            'attachments': [str(p) for p in attachments],
+            'all_files': [str(p) for p in all_files],
+            'candidate_text': candidate_text,
+            'documents': documents,
+        })
 
     return ParsedCandidate(
         uid=uid,

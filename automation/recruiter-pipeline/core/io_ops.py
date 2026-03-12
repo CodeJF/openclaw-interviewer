@@ -17,6 +17,7 @@ def ensure_runtime_dirs(runtime_dir: Path) -> dict[str, Path]:
         'state': runtime_dir / 'state',
         'outbox': runtime_dir / 'outbox',
         'parsed': runtime_dir / 'parsed',
+        'cache': runtime_dir / 'cache',
     }
     for p in dirs.values():
         p.mkdir(parents=True, exist_ok=True)

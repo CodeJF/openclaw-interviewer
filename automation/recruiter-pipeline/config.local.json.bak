@@ -4,21 +4,17 @@
     "port": 143,
     "ssl": false,
     "username": "resume@hichs.com.cn",
-    "password": "CHANGE_ME"
+    "password": "d1e1fA6640341165"
   },
   "feishu": {
     "replyAccount": "interviewer",
     "targetType": "dm",
-    "targetId": "ou_xxx"
+    "targetId": "ou_7e908383e5123fb27c79206ae22ba5d1"
   },
   "pipeline": {
     "jdDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/JD",
     "runtimeDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/automation/recruiter-pipeline/runtime",
-    "maxEmailsPerRun": 10,
-    "parallelParseJobs": 4,
-    "parallelLLMJobs": 1,
-    "onlyUseModel": "MiniMax-M2.5-highspeed",
-    "allowFallback": false,
+    "maxEmailsPerRun": 20,
     "scoreBands": [
       { "name": "80-89", "min": 80, "max": 89 },
       { "name": "90-99", "min": 90, "max": 99 }

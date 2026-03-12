@@ -1,60 +1,48 @@
 # Recruiter Pipeline
 
-MVP flow for interviewer agent:
+当前版本采用 **分层 pipeline**：
 
-1. Pull unseen emails from 263 IMAP inbox
-2. Save attachments (PDF / ZIP / TXT)
-3. Extract candidate text (currently PDF/TXT/MD)
-4. Route candidate to the best JD in `workspace-interviewer/JD`
-5. Ask `interviewer` agent for structured score JSON
-6. Keep only 80-89 / 90-99 bands
-7. Package shortlist ZIP and send to Feishu interviewer bot
-8. Mark processed emails as seen and store processed UIDs locally
+1. IMAP 拉取未读邮件
+2. 读取后立刻标记为已读，并验证 `\\Seen` 是否生效
+3. 提取附件（PDF / ZIP / TXT / MD）
+4. 规则/关键词预筛，先缩小候选 JD 范围
+5. 只把预筛后的 JD 集合交给 `interviewer` agent 做精筛
+6. 仅接受 `MiniMax-M2.5-highspeed` 结果，拒绝 OpenAI Codex fallback
+7. 通过 `openclaw message send` 发送飞书文本和 zip 结果
+
+## Why
+
+相比“每封简历都全文喂给 agent + 全量 JD”，这版先做预筛：
+
+- 更快
+- 更稳
+- 更容易控制模型
+- 更容易逐步升级到向量匹配
 
 ## Files
 
-- `config.example.json`: template config
-- `config.local.json`: local private config (gitignored)
-- `run_pipeline.py`: main pipeline
-- `run_pipeline.sh`: convenience launcher
-- `requirements.txt`: Python deps
+- `main.py`: pipeline 总入口
+- `run_pipeline.py`: 兼容入口，转调 `main.py`
+- `core/imap_client.py`: IMAP 收件、已读校验
+- `core/resume_parser.py`: 附件解析
+- `core/matching.py`: Phase 1 规则/关键词预筛
+- `core/reviewer.py`: MiniMax highspeed 精筛
+- `core/notifier.py`: 通过 OpenClaw 发送消息
+- `core/io_ops.py`: 运行时目录、打包等
 
-`maxEmailsPerRun` defaults to 10 so each run handles a smaller batch instead of chewing through the whole unread backlog in one pass.
-
-## Dry run
-
-```bash
-python3 automation/recruiter-pipeline/run_pipeline.py --dry-run
-```
-
-## Real run
+## Run
 
 ```bash
 bash automation/recruiter-pipeline/run_pipeline.sh
 ```
 
-The launcher automatically creates `automation/recruiter-pipeline/.venv` and installs `pypdf` there.
-
-## Install daily 08:50 launchd job
+## Dry run
 
 ```bash
-bash automation/recruiter-pipeline/install_launchd.sh
+automation/recruiter-pipeline/.venv/bin/python automation/recruiter-pipeline/run_pipeline.py --dry-run
 ```
 
-This installs `com.hichs.interviewer-recruiter-pipeline` under `~/Library/LaunchAgents/` and schedules it for 08:50 Asia/Shanghai (your Mac local time). It does **not** force an immediate run.
+## Next phases
 
-## Runtime outputs
-
-Generated under `automation/recruiter-pipeline/runtime/`:
-
-- `incoming/`: raw downloaded email attachments
-- `processed/YYYY-MM-DD/<JD>/<band>/<candidate>/`: shortlisted candidate outputs
-- `reports/errors/`: per-mail error logs
-- `state/processed-mail-ids.json`: processed UID state
-- `outbox/`: generated ZIP packages
-
-## Notes
-
-- Current MVP assumes JD files are plain text files directly under `JD/`
-- Current MVP focuses on PDF resumes; ZIP is supported but still only PDF/TXT/MD inside ZIP are extracted
-- Feishu delivery uses the configured `interviewer` bot account and direct Feishu OpenAPI file send
+- Phase 2: 将 `core/matching.py` 升级成真正的向量匹配
+- Phase 3: 增加人工复核反馈闭环

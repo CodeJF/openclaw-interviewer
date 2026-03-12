@@ -29,8 +29,11 @@ def save_state(state_path: Path, state: dict) -> None:
     dump_json(state_path, state)
 
 
-def process_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, bands) -> CandidateResult | None:
-    shortlist_jds, prefilter_meta = prefilter_candidate(candidate, jds)
+def process_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, bands, *, llm_top_k: int, min_llm_score: int) -> CandidateResult | None:
+    shortlist_jds, prefilter_meta = prefilter_candidate(candidate, jds, top_k=llm_top_k, min_llm_score=min_llm_score)
+    if not prefilter_meta.get('should_review'):
+        return None
+
     prompt = build_prompt(candidate, shortlist_jds, prefilter_meta)
     result = call_interviewer(prompt)
     score = int(result['score'])
@@ -88,12 +91,15 @@ def main() -> int:
     max_emails = int(config['pipeline'].get('maxEmailsPerRun', 10) or 10)
     parse_jobs = int(config['pipeline'].get('parallelParseJobs', 4) or 4)
     llm_jobs = int(config['pipeline'].get('parallelLLMJobs', 1) or 1)
+    llm_top_k = int(config['pipeline'].get('llmTopKPerResume', 2) or 2)
+    min_llm_score = int(config['pipeline'].get('minLLMScore', 18) or 18)
 
     client = connect_imap(config['mail'])
     messages: list[MailItem] = []
     seen_failures: list[str] = []
     parsed_candidates: list[ParsedCandidate] = []
     results: list[CandidateResult] = []
+    skipped_by_prefilter = 0
     try:
         messages = fetch_unseen_messages(client, max_emails=max_emails)
         if not args.dry_run:
@@ -115,8 +121,36 @@ def main() -> int:
                 if candidate is not None:
                     parsed_candidates.append(candidate)
 
+        review_candidates: list[ParsedCandidate] = []
+        for candidate in parsed_candidates:
+            shortlist_jds, prefilter_meta = prefilter_candidate(candidate, jds, top_k=llm_top_k, min_llm_score=min_llm_score)
+            if prefilter_meta.get('should_review'):
+                review_candidates.append(candidate)
+            else:
+                skipped_by_prefilter += 1
+                prefilter_dir = dirs['reports'] / 'prefilter-skipped'
+                prefilter_dir.mkdir(parents=True, exist_ok=True)
+                dump_json(prefilter_dir / f'{candidate.uid}.json', {
+                    'uid': candidate.uid,
+                    'subject': candidate.subject,
+                    'sender': candidate.sender,
+                    'candidate_name': candidate.candidate_name,
+                    'prefilter': prefilter_meta,
+                })
+
         with ThreadPoolExecutor(max_workers=llm_jobs) as executor:
-            futures = {executor.submit(process_candidate, candidate, dirs, jds, bands): candidate.uid for candidate in parsed_candidates}
+            futures = {
+                executor.submit(
+                    process_candidate,
+                    candidate,
+                    dirs,
+                    jds,
+                    bands,
+                    llm_top_k=llm_top_k,
+                    min_llm_score=min_llm_score,
+                ): candidate.uid
+                for candidate in review_candidates
+            }
             for future in as_completed(futures):
                 try:
                     result = future.result()
@@ -148,6 +182,7 @@ def main() -> int:
 ✅ 本次处理：{len(messages)} 封
 📬 剩余未读：{remaining_unread} 封
 🎯 筛选通过：{len(results)} 人
+⏭️ 预筛跳过 LLM：{skipped_by_prefilter} 封
 
 📨 本次读取名单：
 {processed_mail_list}
@@ -168,6 +203,7 @@ def main() -> int:
 
 ✅ 本次处理：{len(messages)} 封
 📬 剩余未读：{remaining_unread} 封
+⏭️ 预筛跳过 LLM：{skipped_by_prefilter} 封
 
 📨 本次读取名单：
 {processed_mail_list}

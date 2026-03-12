@@ -118,7 +118,13 @@ def score_jd_match(text: str, years: int | None, profile: dict[str, Any]) -> tup
 
 
 
-def prefilter_candidate(candidate: ParsedCandidate, jds: list[JDEntry]) -> tuple[list[JDEntry], dict[str, Any]]:
+def prefilter_candidate(
+    candidate: ParsedCandidate,
+    jds: list[JDEntry],
+    *,
+    top_k: int = 2,
+    min_llm_score: int = 18,
+) -> tuple[list[JDEntry], dict[str, Any]]:
     text = candidate.candidate_text
     years = estimate_years(text)
     ranked: list[tuple[int, JDEntry, dict[str, Any]]] = []
@@ -129,9 +135,7 @@ def prefilter_candidate(candidate: ParsedCandidate, jds: list[JDEntry]) -> tuple
         ranked.append((score, jd, details))
 
     ranked.sort(key=lambda item: item[0], reverse=True)
-    shortlisted = [jd for score, jd, _ in ranked[:3] if score > 0]
-    if not shortlisted:
-        shortlisted = [ranked[0][1]] if ranked else jds[:1]
+    shortlisted = [jd for score, jd, _ in ranked[:top_k] if score >= min_llm_score]
 
     top_scores = [
         {
@@ -141,17 +145,23 @@ def prefilter_candidate(candidate: ParsedCandidate, jds: list[JDEntry]) -> tuple
             'bonus_hits': details['bonus_hits'],
             'negative_hits': details['negative_hits'],
         }
-        for score, jd, details in ranked[:3]
+        for score, jd, details in ranked[: max(top_k, 3)]
     ]
 
+    should_review = bool(shortlisted)
     reasons = []
     if years is not None:
         reasons.append(f'简历文本识别到约 {years} 年经验')
-    reasons.append('规则打分已完成，优先送审 Top JD')
+    if should_review:
+        reasons.append(f'规则打分已完成，送审 Top {len(shortlisted)} JD')
+    else:
+        reasons.append(f'最高规则分低于阈值 {min_llm_score}，跳过 LLM 精筛')
 
     return shortlisted, {
         'estimated_years': years,
         'prefilter_reasons': reasons,
         'top_jds': [jd.title for jd in shortlisted],
         'top_scores': top_scores,
+        'should_review': should_review,
+        'min_llm_score': min_llm_score,
     }

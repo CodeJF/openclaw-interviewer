@@ -135,6 +135,14 @@ def fetch_unseen_messages(client: imaplib.IMAP4, max_emails: int | None = None) 
     return messages
 
 
+def fetch_mail_flags(client: imaplib.IMAP4, uid: str) -> str:
+    status, data = client.uid('fetch', uid, '(FLAGS)')
+    if status != 'OK' or not data:
+        raise PipelineError(f'Failed to fetch flags for uid {uid}: {data}')
+    payload = b' '.join(part for part in data if isinstance(part, bytes)).decode('utf-8', errors='ignore')
+    return payload
+
+
 def decode_text(value: str | None) -> str:
     return value.strip() if value else ''
 
@@ -266,8 +274,17 @@ def call_interviewer(prompt: str) -> dict[str, Any]:
         raise PipelineError(f'interviewer agent failed: {proc.stderr.strip() or proc.stdout.strip()}')
     stdout = proc.stdout.strip()
     data = json.loads(stdout)
+
+    result_block = data.get('result') if isinstance(data.get('result'), dict) else {}
+    agent_meta = result_block.get('meta', {}).get('agentMeta', {}) if isinstance(result_block, dict) else {}
+    provider = str(agent_meta.get('provider') or '')
+    model = str(agent_meta.get('model') or '')
+    if provider == 'openai-codex' or model == 'gpt-5.4':
+        raise PipelineError('interviewer agent unexpectedly fell back to OpenAI Codex; refusing result')
+    if model and model != 'MiniMax-M2.5-highspeed':
+        raise PipelineError(f'interviewer agent used unexpected model: {model}; expected MiniMax-M2.5-highspeed')
+
     content = data.get('reply') or data.get('text') or data.get('message') or ''
-    result_block = data.get('result')
     if not content and isinstance(result_block, dict):
         payloads = result_block.get('payloads') or []
         if payloads and isinstance(payloads[0], dict):
@@ -373,7 +390,7 @@ def send_feishu_message(account_id: str, target_type: str, target_id: str, text:
 
 
 def mark_seen(client: imaplib.IMAP4, uid: str) -> None:
-    """Mark a message as seen and verify the IMAP command succeeds."""
+    """Mark a message as seen and verify the flag really sticks on the server."""
     try:
         status, _ = client.select('INBOX')
     except Exception as exc:
@@ -381,9 +398,39 @@ def mark_seen(client: imaplib.IMAP4, uid: str) -> None:
     if status != 'OK':
         raise PipelineError(f'Unable to re-select INBOX before marking uid {uid} as seen')
 
-    status, data = client.uid('store', uid, '+FLAGS', '(\\Seen)')
+    status, data = client.uid('store', uid, '+FLAGS.SILENT', '(\\Seen)')
     if status != 'OK':
         raise PipelineError(f'Failed to mark uid {uid} as seen: {data}')
+
+    flags_payload = fetch_mail_flags(client, uid)
+    if '\\Seen' not in flags_payload:
+        raise PipelineError(f'IMAP store succeeded but uid {uid} is still not seen: {flags_payload}')
+
+
+def ensure_seen(cfg: dict[str, Any], uid: str, client: imaplib.IMAP4 | None = None) -> None:
+    last_error: Exception | None = None
+    if client is not None:
+        try:
+            mark_seen(client, uid)
+            return
+        except Exception as exc:
+            last_error = exc
+
+    retry_client = None
+    try:
+        retry_client = connect_imap(cfg)
+        mark_seen(retry_client, uid)
+        return
+    except Exception as exc:
+        last_error = exc
+    finally:
+        if retry_client is not None:
+            try:
+                retry_client.logout()
+            except Exception:
+                pass
+
+    raise PipelineError(f'Failed to reliably mark uid {uid} as seen: {last_error}')
 
 
 def process_message(uid: str, msg: Message, dirs: dict[str, Path], jds: list[JDEntry], bands: list[dict[str, Any]]) -> CandidateResult | None:
@@ -546,8 +593,17 @@ def main() -> int:
     results: list[CandidateResult] = []
     newly_processed: list[str] = []
     messages: list[tuple[str, Message]] = []
+    seen_failures: list[str] = []
     try:
         messages = fetch_unseen_messages(client, max_emails=max_emails)
+
+        if not args.dry_run:
+            for uid, _msg in messages:
+                try:
+                    ensure_seen(config['mail'], uid, client)
+                    newly_processed.append(uid)
+                except Exception as exc:
+                    seen_failures.append(f'{uid}: {exc}')
 
         # Prepare arguments for parallel processing
         task_args = [
@@ -562,16 +618,8 @@ def main() -> int:
                 uid, result, error = future.result()
                 if result:
                     results.append(result)
-                if not args.dry_run:
-                    newly_processed.append(uid)
 
-        # Mark all fetched mails as seen after processing
         if not args.dry_run:
-            for uid in newly_processed:
-                try:
-                    mark_seen(client, uid)
-                except Exception as exc:
-                    print(f'Warning: Failed to mark uid {uid} as seen: {exc}')
             processed_uid_set = set(state.get('processed_uids', [])) | set(newly_processed)
             state['processed_uids'] = sorted(processed_uid_set)
             save_state(state_path, state)
@@ -598,6 +646,9 @@ def main() -> int:
         remaining_unread = -1  # Unknown
 
     processed_mail_list = build_processed_mail_list(messages)
+    seen_failure_text = ''
+    if seen_failures:
+        seen_failure_text = '\n\n⚠️ IMAP 已读设置失败：\n' + '\n'.join(f'- {item}' for item in seen_failures)
     feishu_cfg = config['feishu']
     if results:
         summary = build_summary(results)
@@ -617,7 +668,7 @@ def main() -> int:
 📋 通过名单：
 {candidate_list}
 
-{summary}
+{summary}{seen_failure_text}
 
 是否需要继续处理？'''
         if not args.dry_run:
@@ -633,7 +684,7 @@ def main() -> int:
 📨 本次读取名单：
 {processed_mail_list}
 
-本次处理中没有评分在 80 分以上的候选人。
+本次处理中没有评分在 80 分以上的候选人。{seen_failure_text}
 
 是否需要继续处理？'''
         if not args.dry_run:

@@ -14,7 +14,7 @@
   "pipeline": {
     "jdDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/JD",
     "runtimeDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/automation/recruiter-pipeline/runtime",
-    "maxEmailsPerRun": 20,
+    "maxEmailsPerRun": 10,
     "scoreBands": [
       { "name": "80-89", "min": 80, "max": 89 },
       { "name": "90-99", "min": 90, "max": 99 }

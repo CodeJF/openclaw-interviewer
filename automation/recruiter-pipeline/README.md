@@ -19,7 +19,7 @@ MVP flow for interviewer agent:
 - `run_pipeline.sh`: convenience launcher
 - `requirements.txt`: Python deps
 
-`maxEmailsPerRun` defaults to 20 so the first run doesn't try to chew through the whole unread backlog in one pass.
+`maxEmailsPerRun` defaults to 10 so each run handles a smaller batch instead of chewing through the whole unread backlog in one pass.
 
 ## Dry run
 

@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import time
+import urllib.request
+import uuid
+from pathlib import Path
 from typing import Any
 
+from .common import load_json
+from .config import OPENCLAW_CONFIG
 from .models import CandidateResult, MailItem, PipelineError
 
 
@@ -39,6 +45,91 @@ def build_summary(results: list[CandidateResult]) -> str:
     return '\n'.join(lines)
 
 
+def http_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
+    req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), method='POST')
+    req.add_header('Content-Type', 'application/json; charset=utf-8')
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode('utf-8'))
+
+
+
+def load_feishu_credentials(account_id: str) -> tuple[str, str]:
+    cfg = load_json(OPENCLAW_CONFIG)
+    acct = cfg['channels']['feishu']['accounts'][account_id]
+    return acct['appId'], acct['appSecret']
+
+
+
+def get_feishu_tenant_token(app_id: str, app_secret: str) -> str:
+    data = http_json('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+        'app_id': app_id,
+        'app_secret': app_secret,
+    })
+    token = data.get('tenant_access_token')
+    if not token:
+        raise PipelineError(f'Failed to get Feishu tenant token: {data}')
+    return token
+
+
+
+def upload_feishu_file(token: str, file_path: Path, file_name: str) -> str:
+    boundary = f'----OpenClawBoundary{uuid.uuid4().hex}'
+    parts: list[bytes] = []
+
+    def add_field(name: str, value: str):
+        parts.extend([
+            f'--{boundary}\r\n'.encode(),
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+            value.encode('utf-8'),
+            b'\r\n',
+        ])
+
+    add_field('file_type', 'stream')
+    parts.extend([
+        f'--{boundary}\r\n'.encode(),
+        f'Content-Disposition: form-data; name="file_name"\r\n\r\n{file_name}\r\n'.encode(),
+        f'--{boundary}\r\n'.encode(),
+        f'Content-Disposition: form-data; name="file"; filename="{file_name}"\r\n'.encode(),
+        b'Content-Type: application/zip\r\n\r\n',
+        file_path.read_bytes(),
+        b'\r\n',
+        f'--{boundary}--\r\n'.encode(),
+    ])
+    body = b''.join(parts)
+    req = urllib.request.Request('https://open.feishu.cn/open-apis/im/v1/files', data=body, method='POST')
+    req.add_header('Authorization', f'Bearer {token}')
+    req.add_header('Content-Type', f'multipart/form-data; boundary={boundary}')
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+    file_key = data.get('data', {}).get('file_key')
+    if not file_key:
+        raise PipelineError(f'Failed to upload Feishu file: {data}')
+    return file_key
+
+
+
+def send_feishu_file_via_api(account: str, target: str, file_path: str) -> dict[str, Any]:
+    app_id, app_secret = load_feishu_credentials(account)
+    token = get_feishu_tenant_token(app_id, app_secret)
+    file_key = upload_feishu_file(token, Path(file_path), Path(file_path).name)
+    payload = {
+        'receive_id': target,
+        'msg_type': 'file',
+        'content': json.dumps({'file_key': file_key}, ensure_ascii=False),
+    }
+    data = http_json(
+        'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id',
+        payload,
+        {'Authorization': f'Bearer {token}'},
+    )
+    if data.get('code') not in (0, None):
+        raise PipelineError(f'Failed to send Feishu file via API: {data}')
+    return {'method': 'feishu-api', 'fileKey': file_key, 'response': data}
+
+
+
 def send_message(channel: str, account: str, target: str, text: str, media: str | None = None) -> dict[str, Any]:
     cmd = [
         'openclaw', 'message', 'send',
@@ -55,12 +146,25 @@ def send_message(channel: str, account: str, target: str, text: str, media: str 
     started = time.perf_counter()
     proc = subprocess.run(cmd, capture_output=True, text=True)
     elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+    stderr = proc.stderr.strip()
+    stdout = proc.stdout.strip()
     if proc.returncode != 0:
-        raise PipelineError(f'openclaw message send failed: {proc.stderr.strip() or proc.stdout.strip()}')
-    return {
+        raise PipelineError(f'openclaw message send failed: {stderr or stdout}')
+
+    result = {
         'elapsedMs': elapsed_ms,
-        'stdout': proc.stdout.strip(),
-        'stderr': proc.stderr.strip(),
+        'stdout': stdout,
+        'stderr': stderr,
         'media': media,
         'hasText': bool(text),
+        'method': 'openclaw-message-send',
     }
+
+    if media and 'path-not-allowed' in stderr and channel == 'feishu':
+        fallback_started = time.perf_counter()
+        fallback = send_feishu_file_via_api(account, target, media)
+        result['fallback'] = fallback
+        result['fallbackElapsedMs'] = round((time.perf_counter() - fallback_started) * 1000, 2)
+        result['method'] = 'openclaw-message-send+feishu-api-fallback'
+
+    return result

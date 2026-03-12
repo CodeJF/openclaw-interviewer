@@ -6,7 +6,7 @@
 2. 读取后立刻标记为已读，并验证 `\\Seen` 是否生效
 3. 提取附件（PDF / ZIP / TXT / MD）
 4. 基于岗位画像的规则预筛（must/bonus/negative + 年限），先缩小候选 JD 范围
-5. 所有简历先过预筛；只有达到阈值的简历才进入 LLM，且每份简历只比较 Top1/Top2 JD
+5. 所有简历先过预筛；只有达到阈值的简历才进入 LLM，且默认每份简历只比较 Top1 JD（可配置）
 6. 解析结果写入 `runtime/cache/parsed/`，重跑时复用，减少重复 PDF 提取
 7. 简历与 JD 内容会先裁剪再送模型，降低单次推理耗时
 8. 仅接受 `MiniMax-M2.5` 结果，拒绝 OpenAI Codex fallback

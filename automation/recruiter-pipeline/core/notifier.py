@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+import time
+from typing import Any
 
 from .models import CandidateResult, MailItem, PipelineError
 
@@ -37,17 +39,28 @@ def build_summary(results: list[CandidateResult]) -> str:
     return '\n'.join(lines)
 
 
-def send_message(channel: str, account: str, target: str, text: str, media: str | None = None) -> None:
+def send_message(channel: str, account: str, target: str, text: str, media: str | None = None) -> dict[str, Any]:
     cmd = [
         'openclaw', 'message', 'send',
         '--channel', channel,
         '--account', account,
         '--target', target,
+        '--json',
     ]
     if text:
         cmd.extend(['--message', text])
     if media:
         cmd.extend(['--media', media])
+
+    started = time.perf_counter()
     proc = subprocess.run(cmd, capture_output=True, text=True)
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
     if proc.returncode != 0:
         raise PipelineError(f'openclaw message send failed: {proc.stderr.strip() or proc.stdout.strip()}')
+    return {
+        'elapsedMs': elapsed_ms,
+        'stdout': proc.stdout.strip(),
+        'stderr': proc.stderr.strip(),
+        'media': media,
+        'hasText': bool(text),
+    }

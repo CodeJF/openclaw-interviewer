@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -100,9 +101,19 @@ def main() -> int:
     parsed_candidates: list[ParsedCandidate] = []
     results: list[CandidateResult] = []
     skipped_by_prefilter = 0
+    metrics: dict[str, object] = {
+        'startedAt': datetime.now().isoformat(),
+        'durationsMs': {},
+        'counts': {},
+    }
     try:
+        t0 = time.perf_counter()
         messages = fetch_unseen_messages(client, max_emails=max_emails)
+        metrics['durationsMs']['fetchMail'] = round((time.perf_counter() - t0) * 1000, 2)
+        metrics['counts']['messagesFetched'] = len(messages)
+
         if not args.dry_run:
+            t1 = time.perf_counter()
             for item in messages:
                 try:
                     ensure_seen(config['mail'], item.uid, client)
@@ -110,7 +121,9 @@ def main() -> int:
                 except Exception as exc:
                     seen_failures.append(f'{item.uid}: {exc}')
             save_state(state_path, state)
+            metrics['durationsMs']['markSeen'] = round((time.perf_counter() - t1) * 1000, 2)
 
+        t2 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=parse_jobs) as executor:
             futures = {
                 executor.submit(parse_mail_item, item.uid, item.message, dirs['incoming'], dirs['cache'] / 'parsed'):
@@ -120,7 +133,10 @@ def main() -> int:
                 candidate = future.result()
                 if candidate is not None:
                     parsed_candidates.append(candidate)
+        metrics['durationsMs']['parseCandidates'] = round((time.perf_counter() - t2) * 1000, 2)
+        metrics['counts']['parsedCandidates'] = len(parsed_candidates)
 
+        t3 = time.perf_counter()
         review_candidates: list[ParsedCandidate] = []
         for candidate in parsed_candidates:
             shortlist_jds, prefilter_meta = prefilter_candidate(candidate, jds, top_k=llm_top_k, min_llm_score=min_llm_score)
@@ -137,7 +153,11 @@ def main() -> int:
                     'candidate_name': candidate.candidate_name,
                     'prefilter': prefilter_meta,
                 })
+        metrics['durationsMs']['prefilter'] = round((time.perf_counter() - t3) * 1000, 2)
+        metrics['counts']['reviewCandidates'] = len(review_candidates)
+        metrics['counts']['skippedByPrefilter'] = skipped_by_prefilter
 
+        t4 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=llm_jobs) as executor:
             futures = {
                 executor.submit(
@@ -161,13 +181,17 @@ def main() -> int:
                     error_dir = dirs['reports'] / 'errors'
                     error_dir.mkdir(parents=True, exist_ok=True)
                     (error_dir / f'{error_uid}.log').write_text(str(exc), encoding='utf-8')
+        metrics['durationsMs']['llmReview'] = round((time.perf_counter() - t4) * 1000, 2)
+        metrics['counts']['resultsPassed'] = len(results)
     finally:
         try:
             client.logout()
         except Exception:
             pass
 
+    t5 = time.perf_counter()
     remaining_unread = get_remaining_unread(config['mail'])
+    metrics['durationsMs']['remainingUnreadLookup'] = round((time.perf_counter() - t5) * 1000, 2)
     processed_mail_list = build_processed_mail_list(messages)
     seen_failure_text = ''
     if seen_failures:
@@ -194,8 +218,19 @@ def main() -> int:
 
 是否需要继续处理？'''
         if not args.dry_run:
-            send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], msg)
-            send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], '', media=str(zip_path))
+            t6 = time.perf_counter()
+            text_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], msg)
+            file_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], '', media=str(zip_path))
+            metrics['durationsMs']['sendFeishu'] = round((time.perf_counter() - t6) * 1000, 2)
+            metrics['messageSend'] = {
+                'text': text_send,
+                'file': file_send,
+            }
+        else:
+            metrics['durationsMs']['sendFeishu'] = 0
+        metrics['finishedAt'] = datetime.now().isoformat()
+        metrics['durationsMs']['total'] = round((time.perf_counter() - t0) * 1000, 2)
+        dump_json(dirs['reports'] / 'last-run-metrics.json', metrics)
         print(msg)
         print(zip_path)
     else:
@@ -212,7 +247,17 @@ def main() -> int:
 
 是否需要继续处理？'''
         if not args.dry_run:
-            send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], msg)
+            t6 = time.perf_counter()
+            text_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], msg)
+            metrics['durationsMs']['sendFeishu'] = round((time.perf_counter() - t6) * 1000, 2)
+            metrics['messageSend'] = {
+                'text': text_send,
+            }
+        else:
+            metrics['durationsMs']['sendFeishu'] = 0
+        metrics['finishedAt'] = datetime.now().isoformat()
+        metrics['durationsMs']['total'] = round((time.perf_counter() - t0) * 1000, 2)
+        dump_json(dirs['reports'] / 'last-run-metrics.json', metrics)
         print(msg)
 
     return 0

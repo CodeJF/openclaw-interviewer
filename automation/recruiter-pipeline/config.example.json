@@ -20,7 +20,7 @@
     "llmTopKPerResume": 2,
     "minLLMScore": 18,
     "maxCandidateCharsForReview": 12000,
-    "onlyUseModel": "MiniMax-M2.5-highspeed",
+    "onlyUseModel": "MiniMax-M2.5",
     "allowFallback": false,
     "scoreBands": [
       { "name": "80-89", "min": 80, "max": 89 },

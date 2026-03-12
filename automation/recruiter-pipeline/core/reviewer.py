@@ -81,8 +81,8 @@ def call_interviewer(prompt: str) -> dict[str, Any]:
     model = str(agent_meta.get('model') or '')
     if provider == 'openai-codex' or model == 'gpt-5.4':
         raise PipelineError('interviewer agent unexpectedly fell back to OpenAI Codex; refusing result')
-    if model and model != 'MiniMax-M2.5-highspeed':
-        raise PipelineError(f'interviewer agent used unexpected model: {model}; expected MiniMax-M2.5-highspeed')
+    if model and model != 'MiniMax-M2.5':
+        raise PipelineError(f'interviewer agent used unexpected model: {model}; expected MiniMax-M2.5')
 
     content = data.get('reply') or data.get('text') or data.get('message') or ''
     if not content and isinstance(result_block, dict):

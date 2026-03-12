@@ -9,7 +9,7 @@
 5. 所有简历先过预筛；只有达到阈值的简历才进入 LLM，且每份简历只比较 Top1/Top2 JD
 6. 解析结果写入 `runtime/cache/parsed/`，重跑时复用，减少重复 PDF 提取
 7. 简历与 JD 内容会先裁剪再送模型，降低单次推理耗时
-8. 仅接受 `MiniMax-M2.5-highspeed` 结果，拒绝 OpenAI Codex fallback
+8. 仅接受 `MiniMax-M2.5` 结果，拒绝 OpenAI Codex fallback
 9. 通过 `openclaw message send` 发送飞书文本和 zip 结果
 
 ## Why

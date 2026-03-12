@@ -2,7 +2,7 @@
 
 当前版本采用 **分层 pipeline**：
 
-1. IMAP 拉取未读邮件
+1. IMAP 拉取未读邮件（遇到 fetch 阶段 EOF 会自动重连重试）
 2. 读取后立刻标记为已读，并验证 `\\Seen` 是否生效
 3. 提取附件（PDF / ZIP / TXT / MD）
 4. 基于岗位画像的规则预筛（must/bonus/negative + 年限），先缩小候选 JD 范围

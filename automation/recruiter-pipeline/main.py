@@ -108,7 +108,7 @@ def main() -> int:
     }
     try:
         t0 = time.perf_counter()
-        messages = fetch_unseen_messages(client, max_emails=max_emails)
+        messages = fetch_unseen_messages(client, max_emails=max_emails, cfg=config['mail'])
         metrics['durationsMs']['fetchMail'] = round((time.perf_counter() - t0) * 1000, 2)
         metrics['counts']['messagesFetched'] = len(messages)
 

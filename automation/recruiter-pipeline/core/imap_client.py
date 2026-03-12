@@ -19,7 +19,7 @@ def connect_imap(cfg: dict[str, Any]):
     return client
 
 
-def fetch_unseen_messages(client: imaplib.IMAP4, max_emails: int | None = None) -> list[MailItem]:
+def fetch_unseen_messages(client: imaplib.IMAP4, max_emails: int | None = None, cfg: dict[str, Any] | None = None) -> list[MailItem]:
     status, _ = client.select('INBOX')
     if status != 'OK':
         raise PipelineError('Unable to select INBOX')
@@ -32,8 +32,24 @@ def fetch_unseen_messages(client: imaplib.IMAP4, max_emails: int | None = None) 
         uids = uids[:max_emails]
 
     messages: list[MailItem] = []
+    current_client = client
+    reconnects = 0
     for uid in uids:
-        status, parts = client.uid('fetch', uid, '(RFC822)')
+        try:
+            status, parts = current_client.uid('fetch', uid, '(RFC822)')
+        except imaplib.IMAP4.abort as exc:
+            if cfg is None or reconnects >= 2:
+                raise PipelineError(f'IMAP fetch aborted at uid {uid}: {exc}') from exc
+            reconnects += 1
+            try:
+                current_client = connect_imap(cfg)
+                status, _ = current_client.select('INBOX')
+                if status != 'OK':
+                    raise PipelineError('Unable to re-select INBOX after reconnect')
+                status, parts = current_client.uid('fetch', uid, '(RFC822)')
+            except Exception as retry_exc:
+                raise PipelineError(f'IMAP reconnect/fetch failed at uid {uid}: {retry_exc}') from retry_exc
+
         if status != 'OK' or not parts or not parts[0]:
             continue
         raw = parts[0][1]

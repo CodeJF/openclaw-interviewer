@@ -77,6 +77,7 @@ def get_feishu_tenant_token(app_id: str, app_secret: str) -> str:
 def upload_feishu_file(token: str, file_path: Path, file_name: str) -> str:
     boundary = f'----OpenClawBoundary{uuid.uuid4().hex}'
     parts: list[bytes] = []
+    mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' if file_path.suffix.lower() == '.xlsx' else 'application/zip'
 
     def add_field(name: str, value: str):
         parts.extend([
@@ -92,7 +93,7 @@ def upload_feishu_file(token: str, file_path: Path, file_name: str) -> str:
         f'Content-Disposition: form-data; name="file_name"\r\n\r\n{file_name}\r\n'.encode(),
         f'--{boundary}\r\n'.encode(),
         f'Content-Disposition: form-data; name="file"; filename="{file_name}"\r\n'.encode(),
-        b'Content-Type: application/zip\r\n\r\n',
+        f'Content-Type: {mime_type}\r\n\r\n'.encode(),
         file_path.read_bytes(),
         b'\r\n',
         f'--{boundary}--\r\n'.encode(),

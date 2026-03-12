@@ -16,6 +16,7 @@ from core.io_ops import ensure_runtime_dirs, load_jds, package_results
 from core.matching import choose_band, prefilter_candidate
 from core.models import CandidateResult, MailItem, ParsedCandidate, PipelineError
 from core.notifier import build_candidate_list, build_processed_mail_list, build_summary, send_message
+from core.reporting import build_excel_report
 from core.resume_parser import parse_mail_item
 from core.reviewer import build_prompt, call_interviewer
 
@@ -201,6 +202,13 @@ def main() -> int:
         summary = build_summary(results)
         candidate_list = build_candidate_list(results)
         zip_path = package_results([r.work_dir for r in results], dirs['outbox'])
+        excel_path = build_excel_report(
+            messages=messages,
+            results=results,
+            remaining_unread=remaining_unread,
+            skipped_by_prefilter=skipped_by_prefilter,
+            outbox_dir=dirs['outbox'],
+        )
         msg = f'''📊 简历筛选完成
 
 ✅ 本次处理：{len(messages)} 封
@@ -220,10 +228,12 @@ def main() -> int:
         if not args.dry_run:
             t6 = time.perf_counter()
             text_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], msg)
+            excel_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], '', media=str(excel_path))
             file_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], '', media=str(zip_path))
             metrics['durationsMs']['sendFeishu'] = round((time.perf_counter() - t6) * 1000, 2)
             metrics['messageSend'] = {
                 'text': text_send,
+                'excel': excel_send,
                 'file': file_send,
             }
         else:

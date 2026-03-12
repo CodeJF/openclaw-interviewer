@@ -29,12 +29,14 @@
 
 - `main.py`: pipeline 总入口
 - `run_pipeline.py`: 兼容入口，转调 `main.py`
+- `chat_assistant.py`: 面向 interviewer 飞书机器人的自然语言查询入口
 - `core/imap_client.py`: IMAP 收件、已读校验
 - `core/resume_parser.py`: 附件解析
 - `core/matching.py`: Phase 1 规则/关键词预筛
 - `core/reviewer.py`: MiniMax highspeed 精筛
 - `core/notifier.py`: 通过 OpenClaw 发送消息
 - `core/io_ops.py`: 运行时目录、打包等
+- `core/query_ops.py`: 招聘查询/执行能力（岗位候选人、未读简历、最近结果、继续处理）
 
 ## Run
 

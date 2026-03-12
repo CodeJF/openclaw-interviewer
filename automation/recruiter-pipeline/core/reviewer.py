@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import textwrap
+import uuid
 from typing import Any
 
 from .models import JDEntry, ParsedCandidate, PipelineError
@@ -62,9 +63,11 @@ def build_prompt(candidate: ParsedCandidate, jds: list[JDEntry], prefilter_meta:
 
 
 def call_interviewer(prompt: str) -> dict[str, Any]:
+    session_id = f"recruiter-review-{uuid.uuid4()}"
     cmd = [
         'openclaw', 'agent',
         '--agent', 'interviewer',
+        '--session-id', session_id,
         '--message', prompt,
         '--json',
         '--timeout', '600',

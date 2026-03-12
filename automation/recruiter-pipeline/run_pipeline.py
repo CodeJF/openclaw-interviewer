@@ -11,8 +11,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import Message
@@ -373,7 +375,17 @@ def send_feishu_message(account_id: str, target_type: str, target_id: str, text:
 
 
 def mark_seen(client: imaplib.IMAP4, uid: str) -> None:
-    client.uid('store', uid, '+FLAGS', '(\\Seen)')
+    """Mark a message as seen and verify the IMAP command succeeds."""
+    try:
+        status, _ = client.select('INBOX')
+    except Exception as exc:
+        raise PipelineError(f'IMAP connection lost before marking uid {uid} as seen') from exc
+    if status != 'OK':
+        raise PipelineError(f'Unable to re-select INBOX before marking uid {uid} as seen')
+
+    status, data = client.uid('store', uid, '+FLAGS', '(\\Seen)')
+    if status != 'OK':
+        raise PipelineError(f'Failed to mark uid {uid} as seen: {data}')
 
 
 def process_message(uid: str, msg: Message, dirs: dict[str, Path], jds: list[JDEntry], bands: list[dict[str, Any]]) -> CandidateResult | None:
@@ -440,12 +452,23 @@ def process_message(uid: str, msg: Message, dirs: dict[str, Path], jds: list[JDE
     )
 
 
-def package_results(base_dir: Path, outbox_dir: Path) -> Path:
-    zip_name = f"interviewer-shortlist-{datetime.now().strftime('%Y-%m-%d')}.zip"
+def package_results(result_dirs: list[Path], outbox_dir: Path) -> Path:
+    """Create a zip file containing only this run's candidate result directories."""
+    timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
+    zip_name = f"interviewer-shortlist-{timestamp}.zip"
     zip_path = outbox_dir / zip_name
-    if zip_path.exists():
-        zip_path.unlink()
-    shutil.make_archive(str(zip_path.with_suffix('')), 'zip', root_dir=base_dir)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        for src_dir in result_dirs:
+            if not src_dir.exists():
+                continue
+            relative_parts = src_dir.parts[-4:] if len(src_dir.parts) >= 4 else src_dir.parts
+            dst_dir = tmp_path.joinpath(*relative_parts)
+            dst_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src_dir, dst_dir, dirs_exist_ok=False)
+        shutil.make_archive(str(zip_path.with_suffix('')), 'zip', root_dir=tmp_path)
+
     return zip_path
 
 
@@ -458,8 +481,48 @@ def build_summary(results: list[CandidateResult]) -> str:
     for jd_title in sorted(grouped):
         parts = [f"{band} 分 {count} 人" for band, count in sorted(grouped[jd_title].items())]
         lines.append(f"- {jd_title}：" + '，'.join(parts))
-    lines.append('已打包发送，请查收。')
     return '\n'.join(lines)
+
+
+def build_candidate_list(results: list[CandidateResult]) -> str:
+    """Build a list of shortlisted candidates with their scores."""
+    if not results:
+        return "无"
+    lines = []
+    for r in results:
+        lines.append(f"- {r.candidate_name} ({r.matched_jd_title}, {r.score}分)")
+    return '\n'.join(lines)
+
+
+def extract_sender_name(sender: str) -> str:
+    name, addr = email.utils.parseaddr(sender)
+    candidate = (name or addr or sender).strip()
+    return sanitize_filename(candidate, 'unknown-candidate')
+
+
+def build_processed_mail_list(messages: list[tuple[str, Message]]) -> str:
+    if not messages:
+        return '无'
+    lines = []
+    for uid, msg in messages:
+        sender = decode_text(msg.get('from')) or '(unknown sender)'
+        subject = decode_text(msg.get('subject')) or '(no subject)'
+        candidate_name = extract_sender_name(sender)
+        lines.append(f'- {candidate_name} | UID {uid} | {subject}')
+    return '\n'.join(lines)
+
+
+def process_message_wrapper(args: tuple) -> tuple[str, CandidateResult | None, str | None]:
+    """Thread-safe wrapper for processing a single message."""
+    uid, msg, dirs, jds, bands, dry_run = args
+    try:
+        result = process_message(uid, msg, dirs, jds, bands)
+        return (uid, result, None)
+    except Exception as exc:
+        error_dir = dirs['reports'] / 'errors'
+        error_dir.mkdir(parents=True, exist_ok=True)
+        (error_dir / f'{uid}.log').write_text(str(exc), encoding='utf-8')
+        return (uid, None, str(exc))
 
 
 def main() -> int:
@@ -476,45 +539,105 @@ def main() -> int:
     processed_uids = set(state.get('processed_uids', []))
     jds = load_jds(Path(config['pipeline']['jdDir']))
     bands = config['pipeline']['scoreBands']
+    max_emails_limit = int(config['pipeline'].get('maxEmailsLimit', 50) or 50)
     max_emails = int(config['pipeline'].get('maxEmailsPerRun', 20) or 20)
+    max_emails = min(max_emails, max_emails_limit)  # Ensure doesn't exceed limit
+    parallel_jobs = int(config['pipeline'].get('parallelJobs', 3) or 3)
 
     client = connect_imap(config['mail'])
     results: list[CandidateResult] = []
     newly_processed: list[str] = []
+    messages: list[tuple[str, Message]] = []
     try:
         messages = fetch_unseen_messages(client, processed_uids, max_emails=max_emails)
-        for uid, msg in messages:
-            try:
-                result = process_message(uid, msg, dirs, jds, bands)
+
+        # Prepare arguments for parallel processing
+        task_args = [
+            (uid, msg, dirs, jds, bands, args.dry_run)
+            for uid, msg in messages
+        ]
+
+        # Process messages in parallel
+        with ThreadPoolExecutor(max_workers=parallel_jobs) as executor:
+            futures = {executor.submit(process_message_wrapper, arg): arg[0] for arg in task_args}
+            for future in as_completed(futures):
+                uid, result, error = future.result()
                 if result:
                     results.append(result)
                 if not args.dry_run:
-                    mark_seen(client, uid)
                     newly_processed.append(uid)
-            except Exception as exc:
-                error_dir = dirs['reports'] / 'errors'
-                error_dir.mkdir(parents=True, exist_ok=True)
-                (error_dir / f'{uid}.log').write_text(str(exc), encoding='utf-8')
+
+        # Mark all fetched mails as seen after processing
         if not args.dry_run:
-            state['processed_uids'] = sorted(set(state.get('processed_uids', [])) | set(newly_processed))
+            for uid in newly_processed:
+                try:
+                    mark_seen(client, uid)
+                except Exception as exc:
+                    print(f'Warning: Failed to mark uid {uid} as seen: {exc}')
+            processed_uid_set = set(state.get('processed_uids', [])) | set(newly_processed)
+            state['processed_uids'] = sorted(processed_uid_set)
             save_state(state_path, state)
+        else:
+            processed_uid_set = set(state.get('processed_uids', []))
     finally:
         try:
             client.logout()
         except Exception:
             pass
 
-    today_dir = dirs['processed'] / datetime.now().strftime('%Y-%m-%d')
+    # Get remaining unread count after processing
+    try:
+        client = connect_imap(config['mail'])
+        client.select('INBOX')
+        status, data = client.uid('search', None, 'UNSEEN')
+        if status == 'OK':
+            all_unseen = set(u.decode() for u in data[0].split() if u)
+            remaining_unread = len(all_unseen - processed_uid_set)
+        else:
+            remaining_unread = -1
+        client.logout()
+    except Exception:
+        remaining_unread = -1  # Unknown
+
+    processed_mail_list = build_processed_mail_list(messages)
     feishu_cfg = config['feishu']
     if results:
         summary = build_summary(results)
-        zip_path = package_results(today_dir, dirs['outbox'])
+        candidate_list = build_candidate_list(results)
+        # Only zip the work directories from THIS run's qualified candidates
+        result_dirs = [r.work_dir for r in results]
+        zip_path = package_results(result_dirs, dirs['outbox'])
+        msg = f'''📊 简历筛选完成
+
+✅ 本次处理：{len(messages)} 封
+📬 剩余未读：{remaining_unread} 封
+🎯 筛选通过：{len(results)} 人
+
+📨 本次读取名单：
+{processed_mail_list}
+
+📋 通过名单：
+{candidate_list}
+
+{summary}
+
+是否需要继续处理？'''
         if not args.dry_run:
-            send_feishu_message(feishu_cfg['replyAccount'], feishu_cfg['targetType'], feishu_cfg['targetId'], summary, zip_path)
-        print(summary)
+            send_feishu_message(feishu_cfg['replyAccount'], feishu_cfg['targetType'], feishu_cfg['targetId'], msg, zip_path)
+        print(msg)
         print(zip_path)
     else:
-        msg = '今日未读邮件中，没有符合要求且评分在 80 分以上的候选人。'
+        msg = f'''📊 简历筛选完成
+
+✅ 本次处理：{len(messages)} 封
+📬 剩余未读：{remaining_unread} 封
+
+📨 本次读取名单：
+{processed_mail_list}
+
+本次处理中没有评分在 80 分以上的候选人。
+
+是否需要继续处理？'''
         if not args.dry_run:
             send_feishu_message(feishu_cfg['replyAccount'], feishu_cfg['targetType'], feishu_cfg['targetId'], msg)
         print(msg)

@@ -8,6 +8,7 @@ from .models import JDEntry, ParsedCandidate
 JOB_PROFILES: dict[str, dict[str, Any]] = {
     '供应链采购助理': {
         'must_any': ['采购', '供应商', '跟单', 'ERP', '物料', '供应链'],
+        'min_must_hits': 2,
         'bonus': ['Excel', '交期', '催货', '物流', '订单', '元器件'],
         'negative': ['Java', 'Android', 'iOS', '测试开发', '审计'],
         'min_years': 2,
@@ -15,6 +16,7 @@ JOB_PROFILES: dict[str, dict[str, Any]] = {
     },
     '软件工程师（画质）': {
         'must_any': ['C++', 'ISP', '图像', '视频', '画质', '嵌入式'],
+        'min_must_hits': 2,
         'bonus': ['Python', '算法', '背光', 'HDR', '显示', '驱动', '仿真'],
         'negative': ['会计', '采购', '供应商', '发票'],
         'min_years': 3,
@@ -22,13 +24,15 @@ JOB_PROFILES: dict[str, dict[str, Any]] = {
     },
     '应收应付会计': {
         'must_any': ['应收', '应付', '会计', '财务', '发票', '金蝶'],
+        'min_must_hits': 2,
         'bonus': ['对账', '凭证', '银行流水', '账龄', '总账', '进销存'],
-        'negative': ['Java', 'C++', '采购工程师', '画质'],
+        'negative': ['Java', 'C++', '采购工程师', '画质', '资金', '审计'],
         'min_years': 1,
         'max_years': 8,
     },
     '品质工程师': {
         'must_any': ['品质', '质量', 'QE', 'QA', '检验', '8D'],
+        'min_must_hits': 2,
         'bonus': ['客诉', '可靠性', '异常分析', '来料', '制程', 'FMEA'],
         'negative': ['会计', '采购', 'Java', '销售'],
         'min_years': 2,
@@ -36,6 +40,7 @@ JOB_PROFILES: dict[str, dict[str, Any]] = {
     },
     'APP研发主管经理': {
         'must_any': ['APP', 'Android', 'iOS', '蓝牙', '后端', '团队管理'],
+        'min_must_hits': 2,
         'bonus': ['UniApp', 'Vue', 'Golang', 'Java', 'IoT', '穿戴', '架构设计'],
         'negative': ['会计', '采购', '应付', '仓储'],
         'min_years': 5,
@@ -43,6 +48,7 @@ JOB_PROFILES: dict[str, dict[str, Any]] = {
     },
     '测试组长（智能穿戴）': {
         'must_any': ['测试', 'APP测试', '自动化测试', 'Python', '智能穿戴'],
+        'min_must_hits': 2,
         'bonus': ['Monkey', 'Jmeter', 'Postman', '固件', '嵌入式', '测试用例'],
         'negative': ['会计', '采购', '销售'],
         'min_years': 3,
@@ -50,6 +56,7 @@ JOB_PROFILES: dict[str, dict[str, Any]] = {
     },
     'PM（背光显示）': {
         'must_any': ['PM', '产品', '背光', '显示', 'Mini BLU', '原厂'],
+        'min_must_hits': 2,
         'bonus': ['市场调研', '推广', 'Design In', '英文', '半导体'],
         'negative': ['会计', '采购助理', 'Java'],
         'min_years': 2,
@@ -57,6 +64,7 @@ JOB_PROFILES: dict[str, dict[str, Any]] = {
     },
     '大客户经理（TV）': {
         'must_any': ['销售', '客户', 'TV', 'MNT', '背光', '电子元器件'],
+        'min_must_hits': 2,
         'bonus': ['项目立项', '回款', '市场', '大客户', 'Mini LED'],
         'negative': ['会计', '采购助理', '软件开发'],
         'min_years': 3,
@@ -100,11 +108,13 @@ def score_jd_match(text: str, years: int | None, profile: dict[str, Any]) -> tup
     score += bonus_score * 4
     score -= negative_score * 15
 
-    # 如果一个 must 都没命中，说明岗位方向就已经偏了，直接大幅压分
+    min_must_hits = int(profile.get('min_must_hits', 1) or 1)
+
+    # must 命中不足时，说明岗位方向已经偏了，直接更强压分
     if must_score == 0:
         score -= 20
-    elif must_score == 1:
-        score -= 5
+    elif must_score < min_must_hits:
+        score -= 15
 
     # 负向词命中较多时，进一步压分，避免“看起来沾边但方向明显不对”的简历进 LLM
     if negative_score >= 2:

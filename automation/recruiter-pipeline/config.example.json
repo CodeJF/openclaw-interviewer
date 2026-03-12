@@ -18,7 +18,7 @@
     "parallelParseJobs": 4,
     "parallelLLMJobs": 2,
     "llmTopKPerResume": 1,
-    "minLLMScore": 35,
+    "minLLMScore": 42,
     "maxCandidateCharsForReview": 12000,
     "onlyUseModel": "MiniMax-M2.5",
     "allowFallback": false,

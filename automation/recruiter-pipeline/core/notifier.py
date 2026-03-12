@@ -131,6 +131,19 @@ def send_feishu_file_via_api(account: str, target: str, file_path: str) -> dict[
 
 
 def send_message(channel: str, account: str, target: str, text: str, media: str | None = None) -> dict[str, Any]:
+    if media and channel == 'feishu':
+        started = time.perf_counter()
+        fallback = send_feishu_file_via_api(account, target, media)
+        return {
+            'elapsedMs': round((time.perf_counter() - started) * 1000, 2),
+            'stdout': '',
+            'stderr': '',
+            'media': media,
+            'hasText': bool(text),
+            'method': 'feishu-api-direct-file',
+            'fallback': fallback,
+        }
+
     cmd = [
         'openclaw', 'message', 'send',
         '--channel', channel,
@@ -151,7 +164,7 @@ def send_message(channel: str, account: str, target: str, text: str, media: str 
     if proc.returncode != 0:
         raise PipelineError(f'openclaw message send failed: {stderr or stdout}')
 
-    result = {
+    return {
         'elapsedMs': elapsed_ms,
         'stdout': stdout,
         'stderr': stderr,
@@ -159,12 +172,3 @@ def send_message(channel: str, account: str, target: str, text: str, media: str 
         'hasText': bool(text),
         'method': 'openclaw-message-send',
     }
-
-    if media and 'path-not-allowed' in stderr and channel == 'feishu':
-        fallback_started = time.perf_counter()
-        fallback = send_feishu_file_via_api(account, target, media)
-        result['fallback'] = fallback
-        result['fallbackElapsedMs'] = round((time.perf_counter() - fallback_started) * 1000, 2)
-        result['method'] = 'openclaw-message-send+feishu-api-fallback'
-
-    return result

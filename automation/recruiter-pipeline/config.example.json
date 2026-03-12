@@ -14,9 +14,9 @@
   "pipeline": {
     "jdDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/JD",
     "runtimeDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/automation/recruiter-pipeline/runtime",
-    "maxEmailsPerRun": 10,
+    "maxEmailsPerRun": 20,
     "parallelParseJobs": 4,
-    "parallelLLMJobs": 1,
+    "parallelLLMJobs": 2,
     "llmTopKPerResume": 1,
     "minLLMScore": 25,
     "maxCandidateCharsForReview": 12000,

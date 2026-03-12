@@ -7,6 +7,7 @@
 3. 提取附件（PDF / ZIP / TXT / MD）
 4. 基于岗位画像的规则预筛（must/bonus/negative + 年限），先缩小候选 JD 范围
 5. 所有简历先过预筛；只有达到阈值的简历才进入 LLM，且默认每份简历只比较 Top1 JD（可配置）
+6. LLM 默认并发为 2（可配置），避免串行逐封等待过久
 6. 解析结果写入 `runtime/cache/parsed/`，重跑时复用，减少重复 PDF 提取
 7. 简历与 JD 内容会先裁剪再送模型，降低单次推理耗时
 8. 仅接受 `MiniMax-M2.5` 结果，拒绝 OpenAI Codex fallback
@@ -37,6 +38,8 @@
 ```bash
 bash automation/recruiter-pipeline/run_pipeline.sh
 ```
+
+当前本地测试批次已调整为 20 封/轮。
 
 ## Dry run
 

@@ -562,7 +562,7 @@ def detect_intent(text: str) -> str:
         return 'job_stats'
     if '简历发我' in text or '简历发给我' in text or '简历给我' in text:
         return 'send'
-    if '发送给我' in text or '发给我' in text or ('发送' in text and ('候选人' in text or '信息' in text or '详情' in text or '汇总' in text or '摘要' in text)):
+    if '资料发我' in text or '资料发给我' in text or '发送给我' in text or '发给我' in text or ('发送' in text and ('候选人' in text or '信息' in text or '详情' in text or '汇总' in text or '摘要' in text)):
         return 'send'
     if 'top' in lowered or '优先联系' in text or '最合适' in text or '最值得' in text or '推荐' in text:
         return 'top'

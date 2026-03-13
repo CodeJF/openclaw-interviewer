@@ -33,6 +33,7 @@ def fetch_mail_by_uid(client: imaplib.IMAP4, uid: str) -> MailItem | None:
 
 
 def search_unread_header_items(client: imaplib.IMAP4, limit: int = 20) -> list[dict[str, Any]]:
+    """Search unread emails and return header items. Default limit is 20."""
     status, _ = client.select('INBOX')
     if status != 'OK':
         raise PipelineError('Unable to select INBOX')
@@ -52,6 +53,64 @@ def search_unread_header_items(client: imaplib.IMAP4, limit: int = 20) -> list[d
         name, _addr = email.utils.parseaddr(from_match)
         items.append({'uid': uid, 'sender': from_match, 'candidate_name': name, 'subject': subject_match, 'date': date_match})
     return items
+
+
+def search_header_items_by_name(client: imaplib.IMAP4, name: str, *, criterion: str = 'UNSEEN', limit: int = 5) -> list[dict[str, Any]]:
+    """Search mailbox headers by candidate name.
+
+    Args:
+        client: IMAP client
+        name: Candidate name to search for (partial match)
+        criterion: IMAP search criterion, e.g. UNSEEN / SEEN / ALL
+        limit: Maximum number of results to return after finding matches (default 5)
+
+    Returns:
+        List of matching email headers with uid, sender, candidate_name, subject, date
+    """
+    status, _ = client.select('INBOX')
+    if status != 'OK':
+        raise PipelineError('Unable to select INBOX')
+
+    status, data = client.uid('search', None, criterion)
+    if status != 'OK':
+        raise PipelineError(f'Unable to search messages with criterion {criterion}')
+    all_uids = [u.decode() for u in data[0].split() if u]
+
+    key = name.strip().lower()
+    matches: list[dict[str, Any]] = []
+
+    for uid in list(reversed(all_uids)):
+        status, parts = client.uid('fetch', uid, '(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])')
+        if status != 'OK' or not parts or not parts[0]:
+            continue
+        raw = parts[0][1].decode('utf-8', errors='ignore')
+        from_match = next((line[5:].strip() for line in raw.splitlines() if line.lower().startswith('from:')), '')
+        subject_match = next((line[8:].strip() for line in raw.splitlines() if line.lower().startswith('subject:')), '')
+        date_match = next((line[5:].strip() for line in raw.splitlines() if line.lower().startswith('date:')), '')
+        name_from_header, _addr = email.utils.parseaddr(from_match)
+
+        if key and (key in name_from_header.lower() or key in subject_match.lower()):
+            matches.append({
+                'uid': uid,
+                'sender': from_match,
+                'candidate_name': name_from_header,
+                'subject': subject_match,
+                'date': date_match,
+            })
+
+    if limit is None:
+        return matches
+    return matches[:limit] if limit > 0 else matches
+
+
+
+def search_unread_by_name(client: imaplib.IMAP4, name: str, limit: int = 5) -> list[dict[str, Any]]:
+    return search_header_items_by_name(client, name, criterion='UNSEEN', limit=limit)
+
+
+
+def search_seen_by_name(client: imaplib.IMAP4, name: str, limit: int = 5) -> list[dict[str, Any]]:
+    return search_header_items_by_name(client, name, criterion='SEEN', limit=limit)
 
 
 

@@ -13,7 +13,7 @@ from .common import dump_json, load_json
 from .imap_client import connect_imap
 from .io_ops import load_jds
 from .notifier import send_message
-from .pipeline_ops import ensure_candidate_local_by_uid, find_local_download_by_name, find_local_download_by_uid, find_unread_candidate_by_name
+from .pipeline_ops import ensure_candidate_local_by_uid, find_local_download_by_name, find_local_download_by_uid, find_seen_candidate_by_name, find_unread_candidate_by_name
 
 
 @dataclass
@@ -397,7 +397,7 @@ def format_candidate_detail(record: ProcessedCandidateRecord) -> str:
         f'邮件主题：{record.subject or "未知"}',
         f'推荐摘要：{record.summary or "暂无"}',
         f'推荐理由：{record.recommendation or "暂无"}',
-        f'记录位置：{record.work_dir}',
+#        f'记录位置：{record.work_dir}',
     ])
 
 
@@ -883,18 +883,36 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
             }
 
         if not candidates:
-            unread_matches = []
-            if recent_uid:
-                unread_matches = [{'uid': recent_uid, 'candidate_name': candidate_name, 'subject': str(recent_ref.get('subject') or ''), 'sender': str(recent_ref.get('sender') or '')}]
-            else:
-                unread_matches = find_unread_candidate_by_name(candidate_name, config_path=config_path, limit=5)
-            if len(unread_matches) == 1:
-                ensure_result = ensure_candidate_local_by_uid(unread_matches[0]['uid'], config_path=config_path)
+            def _build_single_candidate_send_reply(match_label: str, match_obj: dict[str, Any], ensure_result: dict[str, Any]) -> dict[str, Any]:
                 if ensure_result.get('status') in {'existing', 'processed'}:
                     refreshed = load_processed_candidates(processed_root)
-                    candidates = find_candidates_by_name(refreshed, candidate_name or '', jd_title=jd_title) if candidate_name else []
-                    records = refreshed
-                elif ensure_result.get('status') == 'processed-no-pass':
+                    refreshed_candidates = find_candidates_by_name(refreshed, candidate_name or '', jd_title=jd_title) if candidate_name else []
+                    if refreshed_candidates:
+                        target = refreshed_candidates[0]
+                        message_text = build_candidate_message([target], detail=True)
+                        send_result = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], message_text) if intent == 'send' else None
+                        sent_files: list[dict[str, Any]] = []
+                        if intent == 'send':
+                            for file_path in collect_candidate_files(target.work_dir):
+                                sent_files.append(send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], '', media=file_path))
+                        return {
+                            'intent': intent,
+                            'data': {
+                                'candidate_name': candidate_name,
+                                match_label: match_obj,
+                                'ensure': ensure_result,
+                                'match': asdict(target),
+                                'send': {'text': send_result, 'files': sent_files} if intent == 'send' else None,
+                            },
+                            'reply': (f"已把候选人「{target.candidate_name}」的信息发送给你。\n\n" + message_text) if intent == 'send' else format_candidate_detail(target),
+                        }
+                    return {
+                        'intent': intent,
+                        'data': {'candidate_name': candidate_name, match_label: match_obj, 'ensure': ensure_result, 'matches': []},
+                        'reply': f"候选人「{candidate_name}」已重新拉取到本地，但暂时还没在正式结果里命中，请检查归档结果。",
+                    }
+
+                if ensure_result.get('status') == 'processed-no-pass':
                     evaluation = ensure_result.get('evaluation') or {}
                     basic_text = '\n'.join([
                         f"候选人：{evaluation.get('candidate_name') or candidate_name}",
@@ -911,25 +929,46 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
                             file_sends.append(send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], '', media=file_path))
                         return {
                             'intent': intent,
-                            'data': {'candidate_name': candidate_name, 'unreadMatch': unread_matches[0], 'ensure': ensure_result, 'send': {'text': text_send, 'files': file_sends}},
+                            'data': {'candidate_name': candidate_name, match_label: match_obj, 'ensure': ensure_result, 'send': {'text': text_send, 'files': file_sends}},
                             'reply': f"已把候选人「{candidate_name}」的评审结果和简历发送给你。\n\n" + basic_text,
                         }
                     return {
                         'intent': intent,
-                        'data': {'candidate_name': candidate_name, 'unreadMatch': unread_matches[0], 'ensure': ensure_result},
+                        'data': {'candidate_name': candidate_name, match_label: match_obj, 'ensure': ensure_result},
                         'reply': basic_text,
                     }
-                else:
-                    return {
-                        'intent': intent,
-                        'data': {'candidate_name': candidate_name, 'unreadMatch': unread_matches[0], 'ensure': ensure_result},
-                        'reply': f"候选人「{candidate_name}」已定位到未读邮件，但暂时无法完成单条下载处理（状态：{ensure_result.get('status')}）。",
-                    }
+
+                scope_text = '未读邮件' if match_label == 'unreadMatch' else '已读邮件'
+                return {
+                    'intent': intent,
+                    'data': {'candidate_name': candidate_name, match_label: match_obj, 'ensure': ensure_result},
+                    'reply': f"候选人「{candidate_name}」已定位到{scope_text}，但暂时无法完成单条下载处理（状态：{ensure_result.get('status')}）。",
+                }
+
+            unread_matches = []
+            if recent_uid:
+                unread_matches = [{'uid': recent_uid, 'candidate_name': candidate_name, 'subject': str(recent_ref.get('subject') or ''), 'sender': str(recent_ref.get('sender') or '')}]
+            else:
+                unread_matches = find_unread_candidate_by_name(candidate_name, config_path=config_path)
+            if len(unread_matches) == 1:
+                ensure_result = ensure_candidate_local_by_uid(unread_matches[0]['uid'], config_path=config_path)
+                return _build_single_candidate_send_reply('unreadMatch', unread_matches[0], ensure_result)
             elif len(unread_matches) > 1:
                 return {
                     'intent': intent,
                     'data': {'candidate_name': candidate_name, 'unreadMatches': unread_matches},
                     'reply': f"在未读邮件里找到多位候选人「{candidate_name}」，请进一步确认：\n" + '\n'.join([f"- UID {x['uid']}｜{x.get('candidate_name') or x.get('sender')}｜{x.get('subject')}" for x in unread_matches]),
+                }
+
+            seen_matches = find_seen_candidate_by_name(candidate_name, config_path=config_path)
+            if len(seen_matches) == 1:
+                ensure_result = ensure_candidate_local_by_uid(seen_matches[0]['uid'], config_path=config_path, mark_seen_on_fetch=False)
+                return _build_single_candidate_send_reply('seenMatch', seen_matches[0], ensure_result)
+            elif len(seen_matches) > 1:
+                return {
+                    'intent': intent,
+                    'data': {'candidate_name': candidate_name, 'seenMatches': seen_matches},
+                    'reply': f"在已读邮件里找到多位候选人「{candidate_name}」，请进一步确认：\n" + '\n'.join([f"- UID {x['uid']}｜{x.get('candidate_name') or x.get('sender')}｜{x.get('subject')}" for x in seen_matches]),
                 }
 
         if not candidates:
@@ -942,7 +981,7 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
                     f"评分：{evaluation.get('score') if evaluation.get('score') is not None else '暂无'} 分",
                     f"评审摘要：{evaluation.get('summary') or '暂无'}",
                     f"建议：{evaluation.get('recommendation') or '暂无'}",
-                    f"本地目录：{local_download.get('mailDir')}",
+#                    f"本地目录：{local_download.get('mailDir')}",
                 ])
                 if intent == 'send':
                     text_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], basic_text)

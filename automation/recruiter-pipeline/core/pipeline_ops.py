@@ -7,7 +7,7 @@ from typing import Any
 
 from .common import dump_json, load_json, sanitize_filename
 from .config import DEFAULT_CONFIG
-from .imap_client import connect_imap, ensure_seen, fetch_mail_by_uid, search_unread_header_items
+from .imap_client import connect_imap, ensure_seen, fetch_mail_by_uid, search_seen_by_name, search_unread_by_name, search_unread_header_items
 from .io_ops import ensure_runtime_dirs, load_jds
 from .matching import choose_band, prefilter_candidate
 from .models import CandidateResult, ParsedCandidate
@@ -179,18 +179,42 @@ def ensure_candidate_local_by_uid(uid: str, *, config_path: Path = DEFAULT_CONFI
 
 
 
-def find_unread_candidate_by_name(name: str, *, config_path: Path = DEFAULT_CONFIG, limit: int = 20) -> list[dict[str, Any]]:
+def find_unread_candidate_by_name(name: str, *, config_path: Path = DEFAULT_CONFIG, limit: int | None = None) -> list[dict[str, Any]]:
+    """Find unread candidate by name. Searches ALL unread emails by name.
+
+    Args:
+        name: Candidate name to search for
+        config_path: Path to config file
+        limit: Maximum results to return (default None = return all matches)
+    """
     config = load_json(config_path)
     client = connect_imap(config['mail'])
     try:
-        items = search_unread_header_items(client, limit=limit)
+        items = search_unread_by_name(client, name, limit=limit)
     finally:
         try:
             client.logout()
         except Exception:
             pass
-    key = name.strip().lower()
-    return [item for item in items if key and (key in str(item.get('candidate_name') or '').lower() or key in str(item.get('subject') or '').lower())]
+    return items
+
+
+
+def find_seen_candidate_by_name(name: str, *, config_path: Path = DEFAULT_CONFIG, limit: int | None = None) -> list[dict[str, Any]]:
+    """Find already-read candidate emails by name.
+
+    This is the fallback when a candidate is no longer present locally and is no longer unread.
+    """
+    config = load_json(config_path)
+    client = connect_imap(config['mail'])
+    try:
+        items = search_seen_by_name(client, name, limit=limit)
+    finally:
+        try:
+            client.logout()
+        except Exception:
+            pass
+    return items
 
 
 

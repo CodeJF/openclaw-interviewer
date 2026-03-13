@@ -216,3 +216,25 @@ def find_local_download_by_name(name: str, *, config_path: Path = DEFAULT_CONFIG
                     evaluation = None
             return {'uid': uid_dir.name, 'attachments': matched_files, 'mailDir': str(uid_dir), 'evaluation': evaluation}
     return None
+
+
+
+def find_local_download_by_uid(uid: str, *, config_path: Path = DEFAULT_CONFIG) -> dict[str, Any] | None:
+    if not uid:
+        return None
+    config, dirs, *_ = load_pipeline_context(config_path)
+    uid_dir = dirs['incoming'] / str(uid)
+    raw_dir = uid_dir / 'raw'
+    if not raw_dir.exists() or not uid_dir.exists():
+        return None
+    attachments = [str(p) for p in sorted(raw_dir.iterdir()) if p.is_file()]
+    if not attachments:
+        return None
+    evaluation = None
+    eval_path = dirs['reports'] / 'single-evaluations' / f'{uid}.json'
+    if eval_path.exists():
+        try:
+            evaluation = load_json(eval_path)
+        except Exception:
+            evaluation = None
+    return {'uid': str(uid), 'attachments': attachments, 'mailDir': str(uid_dir), 'evaluation': evaluation}

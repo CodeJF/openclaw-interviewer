@@ -13,7 +13,7 @@ from .common import dump_json, load_json
 from .imap_client import connect_imap
 from .io_ops import load_jds
 from .notifier import send_message
-from .pipeline_ops import ensure_candidate_local_by_uid, find_local_download_by_name, find_unread_candidate_by_name
+from .pipeline_ops import ensure_candidate_local_by_uid, find_local_download_by_name, find_local_download_by_uid, find_unread_candidate_by_name
 
 
 @dataclass
@@ -691,6 +691,17 @@ def resolve_recent_candidate_reference(text: str, runtime_dir: Path) -> dict[str
 
 
 
+def extract_candidate_name_from_subject(subject: str) -> str | None:
+    if not subject:
+        return None
+    match = re.match(r'\s*([^|｜]+?)\s*[|｜]', subject)
+    if match:
+        name = match.group(1).strip()
+        return name or None
+    return None
+
+
+
 def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     config = load_json(config_path)
     pipeline_cfg = config['pipeline']
@@ -789,8 +800,12 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     if intent in {'detail', 'send'}:
         jd_title = normalize_jd_query(text, Path(pipeline_cfg['jdDir']))
         candidate_name = parse_candidate_name(text, records)
+        recent_uid = str(recent_ref.get('uid') or '').strip() if recent_ref else ''
+        recent_subject_name = extract_candidate_name_from_subject(str(recent_ref.get('subject') or '')) if recent_ref else None
         if not candidate_name and recent_ref:
             candidate_name = str(recent_ref.get('candidate_name') or '').strip() or None
+        if recent_subject_name and (not candidate_name or candidate_name in {'BOSS直聘', 'boss直聘'}):
+            candidate_name = recent_subject_name
 
         if intent == 'send' and not candidate_name and jd_title:
             limit = parse_top_limit(text, default=3)
@@ -839,8 +854,40 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
                 'data': {'candidate_name': None, 'matches': []},
                 'reply': '请告诉我候选人姓名，或直接说“把张三的信息发我”。',
             }
+
+        exact_recent_local = find_local_download_by_uid(recent_uid, config_path=config_path) if recent_uid else None
+        if not candidates and exact_recent_local:
+            local_download = exact_recent_local
+            evaluation = local_download.get('evaluation') or {}
+            basic_text = '\n'.join([
+                f"候选人：{evaluation.get('candidate_name') or candidate_name}",
+                f"匹配岗位：{evaluation.get('matched_jd_title') or '未命中岗位'}",
+                f"评分：{evaluation.get('score') if evaluation.get('score') is not None else '暂无'} 分",
+                f"评审摘要：{evaluation.get('summary') or '暂无'}",
+                f"建议：{evaluation.get('recommendation') or '暂无'}",
+            ])
+            if intent == 'send':
+                text_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], basic_text)
+                file_sends = []
+                for file_path in local_download.get('attachments', []):
+                    file_sends.append(send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], '', media=file_path))
+                return {
+                    'intent': intent,
+                    'data': {'candidate_name': candidate_name, 'recentUid': recent_uid, 'localDownload': local_download, 'send': {'text': text_send, 'files': file_sends}},
+                    'reply': f"已把候选人「{candidate_name}」的评审结果和简历发送给你。\n\n" + basic_text,
+                }
+            return {
+                'intent': intent,
+                'data': {'candidate_name': candidate_name, 'recentUid': recent_uid, 'localDownload': local_download},
+                'reply': basic_text,
+            }
+
         if not candidates:
-            unread_matches = find_unread_candidate_by_name(candidate_name, config_path=config_path)
+            unread_matches = []
+            if recent_uid:
+                unread_matches = [{'uid': recent_uid, 'candidate_name': candidate_name, 'subject': str(recent_ref.get('subject') or ''), 'sender': str(recent_ref.get('sender') or '')}]
+            else:
+                unread_matches = find_unread_candidate_by_name(candidate_name, config_path=config_path, limit=5)
             if len(unread_matches) == 1:
                 ensure_result = ensure_candidate_local_by_uid(unread_matches[0]['uid'], config_path=config_path)
                 if ensure_result.get('status') in {'existing', 'processed'}:

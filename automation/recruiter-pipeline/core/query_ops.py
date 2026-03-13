@@ -94,16 +94,34 @@ def load_processed_candidates(processed_root: Path) -> list[ProcessedCandidateRe
 
 
 
-def search_processed_candidates(records: list[ProcessedCandidateRecord], *, jd_title: str | None = None, keyword: str | None = None, min_score: int | None = None, limit: int = 20) -> list[ProcessedCandidateRecord]:
+def search_processed_candidates(
+    records: list[ProcessedCandidateRecord],
+    *,
+    jd_title: str | None = None,
+    keyword: str | None = None,
+    min_score: int | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
     items = records
     if jd_title:
         items = [r for r in items if r.matched_jd_title == jd_title]
     if keyword:
         key = keyword.lower()
-        items = [r for r in items if key in r.candidate_name.lower() or key in r.subject.lower() or key in r.summary.lower()]
+        items = [
+            r for r in items
+            if key in r.candidate_name.lower() or key in r.subject.lower() or key in r.summary.lower()
+        ]
     if min_score is not None:
         items = [r for r in items if r.score >= min_score]
-    return items[:limit]
+
+    total = len(items)
+    shown = items[:limit]
+    return {
+        'total': total,
+        'shown': len(shown),
+        'limit': limit,
+        'items': shown,
+    }
 
 
 
@@ -252,14 +270,29 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     if not jd_title:
         cleaned = re.sub(r'[查找帮我是否有的候选人岗位高分90分以上最近刚才上次]+', ' ', text)
         keyword = cleaned.strip() or None
-    matches = search_processed_candidates(records, jd_title=jd_title, keyword=keyword, min_score=min_score)
+    search_result = search_processed_candidates(records, jd_title=jd_title, keyword=keyword, min_score=min_score)
+    matches = search_result['items']
+    total = int(search_result['total'])
+    shown = int(search_result['shown'])
+    limit = int(search_result['limit'])
     title = jd_title or (f'关键词「{keyword}」' if keyword else '条件')
-    reply = f"查询结果（{title}）：\n" + format_candidates(matches)
+
+    if total == 0:
+        reply = f"查询结果（{title}）：\n没有找到符合条件的候选人。"
+    else:
+        header = f"查询结果（{title}）：共 {total} 人"
+        if total > shown:
+            header += f"，当前展示前 {shown} 人（上限 {limit}）"
+        reply = header + "\n" + format_candidates(matches)
+
     return {
         'intent': intent,
         'data': {
             'jd_title': jd_title,
             'keyword': keyword,
+            'total': total,
+            'shown': shown,
+            'limit': limit,
             'matches': [asdict(x) for x in matches],
         },
         'reply': reply,

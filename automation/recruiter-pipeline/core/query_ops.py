@@ -12,6 +12,7 @@ from typing import Any
 from .common import load_json
 from .imap_client import connect_imap
 from .io_ops import load_jds
+from .notifier import send_message
 
 
 @dataclass
@@ -204,13 +205,136 @@ def run_pipeline_batch(script_path: Path) -> dict[str, Any]:
 
 
 
-def format_candidates(records: list[ProcessedCandidateRecord]) -> str:
+def format_candidates(records: list[ProcessedCandidateRecord], *, start: int = 1) -> str:
     if not records:
         return '没有找到符合条件的候选人。'
     lines = []
-    for idx, rec in enumerate(records, start=1):
+    for idx, rec in enumerate(records, start=start):
         lines.append(f"{idx}. {rec.candidate_name}｜{rec.matched_jd_title}｜{rec.score}分｜{rec.date}")
     return '\n'.join(lines)
+
+
+
+def summarize_jobs(records: list[ProcessedCandidateRecord], *, min_score: int | None = None) -> dict[str, Any]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for rec in records:
+        if min_score is not None and rec.score < min_score:
+            continue
+        bucket = grouped.setdefault(rec.matched_jd_title, {
+            'jd_title': rec.matched_jd_title,
+            'count': 0,
+            'highScoreCount': 0,
+            'scoreTotal': 0,
+            'latestDate': '',
+        })
+        bucket['count'] += 1
+        bucket['scoreTotal'] += rec.score
+        if rec.score >= 90:
+            bucket['highScoreCount'] += 1
+        if rec.date > bucket['latestDate']:
+            bucket['latestDate'] = rec.date
+
+    jobs = []
+    for bucket in grouped.values():
+        count = int(bucket['count'])
+        avg_score = round(bucket['scoreTotal'] / count, 1) if count else 0
+        jobs.append({
+            'jd_title': bucket['jd_title'],
+            'count': count,
+            'highScoreCount': int(bucket['highScoreCount']),
+            'avgScore': avg_score,
+            'latestDate': bucket['latestDate'],
+        })
+    jobs.sort(key=lambda item: (item['count'], item['highScoreCount'], item['avgScore'], item['jd_title']), reverse=True)
+    return {
+        'jobs': jobs,
+        'topJob': jobs[0]['jd_title'] if jobs else None,
+    }
+
+
+
+def format_job_stats(stats: dict[str, Any]) -> str:
+    jobs = stats.get('jobs', [])
+    if not jobs:
+        return '暂时没有可统计的候选人数据。'
+    lines = ['岗位投递统计：']
+    for item in jobs:
+        lines.append(
+            f"- {item['jd_title']}：{item['count']}人，90分以上{item['highScoreCount']}人，平均分{item['avgScore']}"
+        )
+    if stats.get('topJob'):
+        lines.append(f"\n投递最多岗位：{stats['topJob']}")
+    return '\n'.join(lines)
+
+
+
+def find_candidates_by_name(
+    records: list[ProcessedCandidateRecord],
+    name: str,
+    *,
+    jd_title: str | None = None,
+    limit: int = 10,
+) -> list[ProcessedCandidateRecord]:
+    query = name.strip().lower()
+    if not query:
+        return []
+    items = records
+    if jd_title:
+        items = [r for r in items if r.matched_jd_title == jd_title]
+
+    exact = [r for r in items if r.candidate_name.strip().lower() == query]
+    if exact:
+        return exact[:limit]
+
+    partial = [
+        r for r in items
+        if query in r.candidate_name.lower() or query in r.subject.lower() or query in r.sender.lower()
+    ]
+    return partial[:limit]
+
+
+
+def format_candidate_detail(record: ProcessedCandidateRecord) -> str:
+    return '\n'.join([
+        f'候选人：{record.candidate_name}',
+        f'匹配岗位：{record.matched_jd_title}',
+        f'评分：{record.score} 分',
+        f'分档：{record.band}',
+        f'投递时间：{record.date}',
+        f'发件人：{record.sender or "未知"}',
+        f'邮件主题：{record.subject or "未知"}',
+        f'推荐摘要：{record.summary or "暂无"}',
+        f'推荐理由：{record.recommendation or "暂无"}',
+        f'记录位置：{record.work_dir}',
+    ])
+
+
+
+def build_candidate_message(records: list[ProcessedCandidateRecord], *, detail: bool = False) -> str:
+    if not records:
+        return '没有可发送的候选人信息。'
+    if detail and len(records) == 1:
+        return format_candidate_detail(records[0])
+
+    lines = ['候选人信息如下：']
+    for idx, rec in enumerate(records, start=1):
+        line = f"{idx}. {rec.candidate_name}｜{rec.matched_jd_title}｜{rec.score}分｜{rec.date}"
+        if detail:
+            line += f"\n   摘要：{rec.summary or '暂无'}"
+        lines.append(line)
+    return '\n'.join(lines)
+
+
+
+def parse_candidate_name(text: str, records: list[ProcessedCandidateRecord]) -> str | None:
+    sorted_names = sorted({r.candidate_name.strip() for r in records if r.candidate_name.strip()}, key=len, reverse=True)
+    for name in sorted_names:
+        if name and name in text:
+            return name
+    explicit = re.search(r'把?\s*([\u4e00-\u9fa5A-Za-z·]{2,20})\s*(?:的)?(?:信息|详情|资料)', text)
+    if explicit:
+        return explicit.group(1).strip()
+    return None
 
 
 
@@ -218,9 +342,15 @@ def detect_intent(text: str) -> str:
     lowered = text.lower()
     if '未读' in text and ('简历' in text or '邮件' in text):
         return 'unread'
+    if '发送给我' in text or '发给我' in text or ('发送' in text and ('候选人' in text or '信息' in text or '详情' in text)):
+        return 'send'
+    if '哪个岗位投递的人最多' in text or '哪个岗位投递最多' in text or '各岗位' in text or '岗位统计' in text:
+        return 'job_stats'
+    if '详情' in text or '什么情况' in text or '为什么高分' in text or ('信息' in text and '发送' not in text and '发给我' not in text):
+        return 'detail'
     if '继续处理' in text or ('处理' in text and '封' in text):
         return 'run'
-    if '最近' in text or '刚才' in text or '上次' in text:
+    if '最近一次' in text or '刚才' in text or '上次' in text:
         return 'latest'
     if '90分' in text or '高分' in text:
         return 'highscore'
@@ -301,6 +431,7 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     runtime_dir = Path(pipeline_cfg['runtimeDir'])
     processed_root = runtime_dir / 'processed'
     intent = detect_intent(text)
+    records = load_processed_candidates(processed_root)
 
     if intent == 'unread':
         unread = list_unread_resumes(config['mail'])
@@ -311,6 +442,57 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
                 count=unread.get('count', 0),
                 items='\n'.join([f"- UID {i['uid']}｜{i.get('candidate_name') or i['sender']}｜{i['subject']}" for i in unread.get('items', [])]) or '暂无样本列表',
             ),
+        }
+
+    if intent == 'job_stats':
+        stats = summarize_jobs(records)
+        return {
+            'intent': intent,
+            'data': stats,
+            'reply': format_job_stats(stats),
+        }
+
+    if intent in {'detail', 'send'}:
+        jd_title = normalize_jd_query(text, Path(pipeline_cfg['jdDir']))
+        candidate_name = parse_candidate_name(text, records)
+        candidates = find_candidates_by_name(records, candidate_name or '', jd_title=jd_title) if candidate_name else []
+        if not candidate_name:
+            return {
+                'intent': intent,
+                'data': {'candidate_name': None, 'matches': []},
+                'reply': '请告诉我候选人姓名，或直接说“把张三的信息发我”。',
+            }
+        if not candidates:
+            return {
+                'intent': intent,
+                'data': {'candidate_name': candidate_name, 'matches': []},
+                'reply': f'没有找到候选人「{candidate_name}」，你可以再给我岗位名或更完整姓名。',
+            }
+        if len(candidates) > 1:
+            return {
+                'intent': intent,
+                'data': {'candidate_name': candidate_name, 'matches': [asdict(x) for x in candidates]},
+                'reply': f"找到多位候选人「{candidate_name}」，请进一步确认：\n" + format_candidates(candidates),
+            }
+
+        target = candidates[0]
+        if intent == 'detail':
+            return {
+                'intent': intent,
+                'data': {'candidate_name': candidate_name, 'match': asdict(target)},
+                'reply': format_candidate_detail(target),
+            }
+
+        message_text = build_candidate_message(candidates, detail=True)
+        send_result = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], message_text)
+        return {
+            'intent': intent,
+            'data': {
+                'candidate_name': candidate_name,
+                'match': asdict(target),
+                'send': send_result,
+            },
+            'reply': f'已把候选人「{target.candidate_name}」的信息发送给你。\n\n' + message_text,
         }
 
     if intent == 'latest':
@@ -335,7 +517,6 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
             'reply': f'已触发继续处理 {limit} 封，执行{status}。\n\n{result["stdout"][:800] or result["stderr"][:800]}',
         }
 
-    records = load_processed_candidates(processed_root)
     jd_title = normalize_jd_query(text, Path(pipeline_cfg['jdDir']))
     min_score = 90 if intent == 'highscore' else None
     search_limit = parse_search_limit(text, default=20)

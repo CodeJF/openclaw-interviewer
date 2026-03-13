@@ -282,6 +282,75 @@ def format_job_stats(stats: dict[str, Any]) -> str:
 
 
 
+def build_daily_summary(records: list[ProcessedCandidateRecord], *, date: str | None = None, top_limit: int = 5) -> dict[str, Any]:
+    target_date = date or '2026-03-13'
+    day_records = [r for r in records if r.date == target_date]
+    stats = summarize_jobs(day_records)
+    high_scores = sorted([r for r in day_records if r.score >= 90], key=lambda r: (r.score, r.date), reverse=True)
+    top_recommended = high_scores[:top_limit]
+    return {
+        'date': target_date,
+        'total': len(day_records),
+        'highScoreTotal': len(high_scores),
+        'jobStats': stats,
+        'topRecommended': [asdict(x) for x in top_recommended],
+    }
+
+
+
+def format_daily_summary(summary: dict[str, Any]) -> str:
+    date = summary.get('date') or '未知日期'
+    total = int(summary.get('total') or 0)
+    high_score_total = int(summary.get('highScoreTotal') or 0)
+    stats = summary.get('jobStats', {})
+    jobs = stats.get('jobs', [])
+    top_recommended = summary.get('topRecommended', [])
+
+    lines = [f'招聘汇总（{date}）：', f'- 今日新增候选人：{total} 人', f'- 今日高分候选人：{high_score_total} 人']
+    if jobs:
+        lines.append('- 岗位分布：')
+        for item in jobs[:8]:
+            lines.append(f"  - {item['jd_title']}：{item['count']}人，90分以上{item['highScoreCount']}人")
+    else:
+        lines.append('- 岗位分布：今日暂无数据')
+
+    if top_recommended:
+        lines.append('- 今日优先联系：')
+        for idx, rec in enumerate(top_recommended, start=1):
+            lines.append(f"  {idx}. {rec['candidate_name']}｜{rec['matched_jd_title']}｜{rec['score']}分")
+    else:
+        lines.append('- 今日优先联系：暂无 90 分以上候选人')
+    return '\n'.join(lines)
+
+
+
+def build_high_score_summary(records: list[ProcessedCandidateRecord], *, date: str | None = None, min_score: int = 90, limit: int = 10) -> dict[str, Any]:
+    target_date = date or '2026-03-13'
+    items = [r for r in records if r.date == target_date and r.score >= min_score]
+    items.sort(key=lambda r: (r.score, r.matched_jd_title, r.candidate_name), reverse=True)
+    return {
+        'date': target_date,
+        'minScore': min_score,
+        'total': len(items),
+        'items': [asdict(x) for x in items[:limit]],
+    }
+
+
+
+def format_high_score_summary(summary: dict[str, Any]) -> str:
+    date = summary.get('date') or '未知日期'
+    min_score = int(summary.get('minScore') or 90)
+    items = summary.get('items', [])
+    total = int(summary.get('total') or 0)
+    if not items:
+        return f'高分候选人摘要（{date}）：暂无 {min_score} 分以上候选人。'
+    lines = [f'高分候选人摘要（{date}，{min_score}分以上）：共 {total} 人']
+    for idx, rec in enumerate(items, start=1):
+        lines.append(f"{idx}. {rec['candidate_name']}｜{rec['matched_jd_title']}｜{rec['score']}分\n   理由：{rec['recommendation'] or rec['summary'] or '暂无'}")
+    return '\n'.join(lines)
+
+
+
 def find_candidates_by_name(
     records: list[ProcessedCandidateRecord],
     name: str,
@@ -446,9 +515,11 @@ def detect_intent(text: str) -> str:
     lowered = text.lower()
     if '未读' in text and ('简历' in text or '邮件' in text):
         return 'unread'
+    if ('汇总' in text or '摘要' in text) and ('今天' in text or '今日' in text or '招聘' in text or '高分' in text):
+        return 'daily_summary'
     if '哪个岗位投递的人最多' in text or '哪个岗位投递最多' in text or '各岗位' in text or '岗位统计' in text:
         return 'job_stats'
-    if '发送给我' in text or '发给我' in text or ('发送' in text and ('候选人' in text or '信息' in text or '详情' in text)):
+    if '发送给我' in text or '发给我' in text or ('发送' in text and ('候选人' in text or '信息' in text or '详情' in text or '汇总' in text or '摘要' in text)):
         return 'send'
     if 'top' in lowered or '优先联系' in text or '最合适' in text or '最值得' in text or '推荐' in text:
         return 'top'
@@ -556,6 +627,39 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
             'intent': intent,
             'data': stats,
             'reply': format_job_stats(stats),
+        }
+
+    if intent == 'daily_summary':
+        target_date = parse_date_after(text) or ('2026-03-13' if ('今天' in text or '今日' in text) else None) or '2026-03-13'
+        is_highscore_summary = '高分' in text or '90分' in text
+        if is_highscore_summary:
+            summary = build_high_score_summary(records, date=target_date, min_score=90, limit=10)
+            message_text = format_high_score_summary(summary)
+        else:
+            summary = build_daily_summary(records, date=target_date, top_limit=5)
+            message_text = format_daily_summary(summary)
+
+        if '发送给我' in text or '发给我' in text:
+            send_result = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], message_text)
+            return {
+                'intent': intent,
+                'data': {
+                    'date': target_date,
+                    'highscoreOnly': is_highscore_summary,
+                    'summary': summary,
+                    'send': send_result,
+                },
+                'reply': '已把汇总发送给你。\n\n' + message_text,
+            }
+
+        return {
+            'intent': intent,
+            'data': {
+                'date': target_date,
+                'highscoreOnly': is_highscore_summary,
+                'summary': summary,
+            },
+            'reply': message_text,
         }
 
     if intent in {'top', 'highscore'}:

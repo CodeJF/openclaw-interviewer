@@ -77,8 +77,8 @@ def evaluate_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, b
 
 
 
-def process_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, bands, *, llm_top_k: int, min_llm_score: int) -> CandidateResult | None:
-    eval_result = evaluate_candidate(candidate, dirs, jds, bands, llm_top_k=llm_top_k, min_llm_score=min_llm_score)
+def process_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, bands, *, llm_top_k: int, min_llm_score: int, evaluation: dict[str, Any] | None = None) -> CandidateResult | None:
+    eval_result = evaluation or evaluate_candidate(candidate, dirs, jds, bands, llm_top_k=llm_top_k, min_llm_score=min_llm_score)
     if not eval_result.get('passed'):
         return None
 
@@ -154,7 +154,7 @@ def ensure_candidate_local_by_uid(uid: str, *, config_path: Path = DEFAULT_CONFI
             except Exception:
                 pass
         if eval_result.get('passed'):
-            result = process_candidate(candidate, dirs, jds, bands, llm_top_k=llm_top_k, min_llm_score=min_llm_score)
+            result = process_candidate(candidate, dirs, jds, bands, llm_top_k=llm_top_k, min_llm_score=min_llm_score, evaluation=eval_result)
             return {
                 'status': 'processed',
                 'uid': uid,

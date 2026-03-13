@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .common import load_json
+from .common import dump_json, load_json
 from .imap_client import connect_imap
 from .io_ops import load_jds
 from .notifier import send_message
@@ -636,6 +636,52 @@ def parse_search_sort(text: str) -> tuple[str, bool]:
 
 
 
+def load_chat_state(runtime_dir: Path) -> dict[str, Any]:
+    state_path = runtime_dir / 'state' / 'chat-context.json'
+    if state_path.exists():
+        try:
+            return load_json(state_path)
+        except Exception:
+            return {}
+    return {}
+
+
+
+def save_chat_state(runtime_dir: Path, data: dict[str, Any]) -> None:
+    state_path = runtime_dir / 'state' / 'chat-context.json'
+    dump_json(state_path, data)
+
+
+
+def update_recent_candidates(runtime_dir: Path, items: list[dict[str, Any]], *, source: str) -> None:
+    save_chat_state(runtime_dir, {'source': source, 'recentCandidates': items})
+
+
+
+def resolve_recent_candidate_reference(text: str, runtime_dir: Path) -> dict[str, Any] | None:
+    state = load_chat_state(runtime_dir)
+    recent = state.get('recentCandidates') or []
+    if not recent:
+        return None
+    if '刚刚那个' in text or '这个人' in text or '这个候选人' in text:
+        return recent[0]
+    match = re.search(r'第\s*(\d+)\s*(?:个|位)', text)
+    if match:
+        idx = int(match.group(1)) - 1
+        if 0 <= idx < len(recent):
+            return recent[idx]
+    cn_match = re.search(r'第\s*([一二两三四五六七八九十])\s*(?:个|位)', text)
+    if cn_match:
+        cn_map = {'一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
+        idx = cn_map.get(cn_match.group(1), 1) - 1
+        if 0 <= idx < len(recent):
+            return recent[idx]
+    if '下一个' in text and len(recent) >= 2:
+        return recent[1]
+    return None
+
+
+
 def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     config = load_json(config_path)
     pipeline_cfg = config['pipeline']
@@ -643,9 +689,11 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     processed_root = runtime_dir / 'processed'
     intent = detect_intent(text)
     records = load_processed_candidates(processed_root)
+    recent_ref = resolve_recent_candidate_reference(text, runtime_dir)
 
     if intent == 'unread':
         unread = list_unread_resumes(config['mail'], processed_root=processed_root)
+        update_recent_candidates(runtime_dir, unread.get('items', []), source='unread')
         return {
             'intent': intent,
             'data': unread,
@@ -714,6 +762,8 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
             sort_desc=True,
         )
         matches = result['items']
+        match_dicts = [asdict(x) for x in matches]
+        update_recent_candidates(runtime_dir, match_dicts, source=intent)
         return {
             'intent': intent,
             'data': {
@@ -722,7 +772,7 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
                 'min_score': min_score,
                 'date_after': date_after,
                 'keywords': skill_keywords,
-                'matches': [asdict(x) for x in matches],
+                'matches': match_dicts,
             },
             'reply': build_top_candidates_reply(matches, jd_title=jd_title),
         }
@@ -730,6 +780,8 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     if intent in {'detail', 'send'}:
         jd_title = normalize_jd_query(text, Path(pipeline_cfg['jdDir']))
         candidate_name = parse_candidate_name(text, records)
+        if not candidate_name and recent_ref:
+            candidate_name = str(recent_ref.get('candidate_name') or '').strip() or None
 
         if intent == 'send' and not candidate_name and jd_title:
             limit = parse_top_limit(text, default=3)
@@ -967,6 +1019,8 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
                 header += f"，本页展示 {shown} 人（每页/本次上限 {limit}）"
             reply = header + "\n" + format_candidates(matches)
 
+    match_dicts = [asdict(x) for x in matches]
+    update_recent_candidates(runtime_dir, match_dicts, source='search')
     return {
         'intent': intent,
         'data': {
@@ -980,7 +1034,7 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
             'offset': offset,
             'sortBy': sort_by,
             'sortDesc': sort_desc,
-            'matches': [asdict(x) for x in matches],
+            'matches': match_dicts,
         },
         'reply': reply,
     }

@@ -27,41 +27,77 @@ def load_pipeline_context(config_path: Path = DEFAULT_CONFIG) -> tuple[dict[str,
 
 
 
-def process_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, bands, *, llm_top_k: int, min_llm_score: int) -> CandidateResult | None:
+def evaluate_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, bands, *, llm_top_k: int, min_llm_score: int) -> dict[str, Any]:
     shortlist_jds, prefilter_meta = prefilter_candidate(candidate, jds, top_k=llm_top_k, min_llm_score=min_llm_score)
     if not prefilter_meta.get('should_review'):
         prefilter_dir = dirs['reports'] / 'prefilter-skipped'
         prefilter_dir.mkdir(parents=True, exist_ok=True)
-        dump_json(prefilter_dir / f'{candidate.uid}.json', {
+        payload = {
             'uid': candidate.uid,
             'subject': candidate.subject,
             'sender': candidate.sender,
             'candidate_name': candidate.candidate_name,
             'prefilter': prefilter_meta,
-        })
-        return None
+            'passed': False,
+            'reason': 'prefilter-skipped',
+            'matched_jd_title': prefilter_meta.get('top_jds', ['未命中岗位'])[0] if prefilter_meta.get('top_jds') else '未命中岗位',
+            'score': 0,
+            'band': None,
+            'summary': '规则预筛未通过，未进入正式评审。',
+            'recommendation': '当前不建议推进，除非人工认为该候选人值得特殊复核。',
+        }
+        dump_json(prefilter_dir / f'{candidate.uid}.json', payload)
+        return payload
 
     prompt = build_prompt(candidate, shortlist_jds, prefilter_meta)
     result = call_interviewer(prompt)
     score = int(result['score'])
     band = choose_band(score, bands)
-    if not band:
-        return None
-
     jd_title = str(result['matched_jd_title']).strip()
     summary = str(result.get('summary') or '').strip()
     recommendation = str(result.get('recommendation') or '').strip()
     candidate_name = sanitize_filename(str(result.get('candidate_name') or candidate.candidate_name), candidate.uid)
+    passed = band is not None
+
+    eval_result = dict(result)
+    eval_result.update({
+        'candidate_name': candidate_name,
+        'matched_jd_title': jd_title,
+        'score': score,
+        'band': band,
+        'passed': passed,
+        'prefilter': prefilter_meta,
+        'reason': 'passed' if passed else 'score-out-of-band',
+    })
+
+    review_dir = dirs['reports'] / 'single-evaluations'
+    review_dir.mkdir(parents=True, exist_ok=True)
+    dump_json(review_dir / f'{candidate.uid}.json', eval_result)
+    return eval_result
+
+
+
+def process_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, bands, *, llm_top_k: int, min_llm_score: int) -> CandidateResult | None:
+    eval_result = evaluate_candidate(candidate, dirs, jds, bands, llm_top_k=llm_top_k, min_llm_score=min_llm_score)
+    if not eval_result.get('passed'):
+        return None
+
+    jd_title = str(eval_result['matched_jd_title']).strip()
+    summary = str(eval_result.get('summary') or '').strip()
+    recommendation = str(eval_result.get('recommendation') or '').strip()
+    candidate_name = sanitize_filename(str(eval_result.get('candidate_name') or candidate.candidate_name), candidate.uid)
+    band = str(eval_result['band'])
+    score = int(eval_result['score'])
 
     work_dir = dirs['processed'] / datetime.now().strftime('%Y-%m-%d') / sanitize_filename(jd_title) / band / candidate_name
     work_dir.mkdir(parents=True, exist_ok=True)
-    dump_json(work_dir / 'result.json', result)
+    dump_json(work_dir / 'result.json', eval_result)
     dump_json(work_dir / 'mail.json', {
         'uid': candidate.uid,
         'subject': candidate.subject,
         'sender': candidate.sender,
         'documents': candidate.documents,
-        'prefilter': prefilter_meta,
+        'prefilter': eval_result.get('prefilter', {}),
     })
     (work_dir / 'candidate_material.txt').write_text(candidate.candidate_text, encoding='utf-8')
     for attachment in candidate.attachments:
@@ -78,7 +114,7 @@ def process_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, ba
         candidate_name=candidate_name,
         summary=summary,
         recommendation=recommendation,
-        raw_result=result,
+        raw_result=eval_result,
         work_dir=work_dir,
     )
 
@@ -111,26 +147,29 @@ def ensure_candidate_local_by_uid(uid: str, *, config_path: Path = DEFAULT_CONFI
         candidate = parse_mail_item(item.uid, item.message, dirs['incoming'], dirs['cache'] / 'parsed')
         if candidate is None:
             return {'status': 'no-parse', 'uid': uid}
-        result = process_candidate(candidate, dirs, jds, bands, llm_top_k=llm_top_k, min_llm_score=min_llm_score)
+        eval_result = evaluate_candidate(candidate, dirs, jds, bands, llm_top_k=llm_top_k, min_llm_score=min_llm_score)
         if mark_seen_on_fetch:
             try:
                 ensure_seen(config['mail'], uid, client)
             except Exception:
                 pass
-        if result is None:
+        if eval_result.get('passed'):
+            result = process_candidate(candidate, dirs, jds, bands, llm_top_k=llm_top_k, min_llm_score=min_llm_score)
             return {
-                'status': 'processed-no-pass',
+                'status': 'processed',
                 'uid': uid,
-                'mailDir': str(candidate.mail_dir),
+                'workDir': str(result.work_dir) if result else None,
                 'attachments': [str(p) for p in candidate.attachments],
                 'allFiles': [str(p) for p in candidate.all_files],
+                'evaluation': eval_result,
             }
         return {
-            'status': 'processed',
+            'status': 'processed-no-pass',
             'uid': uid,
-            'workDir': str(result.work_dir),
+            'mailDir': str(candidate.mail_dir),
             'attachments': [str(p) for p in candidate.attachments],
             'allFiles': [str(p) for p in candidate.all_files],
+            'evaluation': eval_result,
         }
     finally:
         try:
@@ -159,6 +198,7 @@ def find_local_download_by_name(name: str, *, config_path: Path = DEFAULT_CONFIG
     config, dirs, *_ = load_pipeline_context(config_path)
     key = name.strip().lower()
     incoming_root = dirs['incoming']
+    eval_root = dirs['reports'] / 'single-evaluations'
     for uid_dir in sorted(incoming_root.iterdir(), reverse=True):
         if not uid_dir.is_dir():
             continue
@@ -167,5 +207,12 @@ def find_local_download_by_name(name: str, *, config_path: Path = DEFAULT_CONFIG
             continue
         matched_files = [str(p) for p in raw_dir.iterdir() if p.is_file() and key in p.name.lower()]
         if matched_files:
-            return {'uid': uid_dir.name, 'attachments': matched_files, 'mailDir': str(uid_dir)}
+            evaluation = None
+            eval_path = eval_root / f'{uid_dir.name}.json'
+            if eval_path.exists():
+                try:
+                    evaluation = load_json(eval_path)
+                except Exception:
+                    evaluation = None
+            return {'uid': uid_dir.name, 'attachments': matched_files, 'mailDir': str(uid_dir), 'evaluation': evaluation}
     return None

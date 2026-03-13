@@ -471,9 +471,15 @@ def parse_candidate_name(text: str, records: list[ProcessedCandidateRecord]) -> 
     for name in sorted_names:
         if name and name in text:
             return name
-    explicit = re.search(r'把?\s*([\u4e00-\u9fa5A-Za-z·]{2,20}?)(?:的)?\s*(?:信息|详情|资料)', text)
-    if explicit:
-        return explicit.group(1).strip()
+    explicit_patterns = [
+        r'把?\s*([\u4e00-\u9fa5A-Za-z·]{2,20}?)(?:的)?\s*(?:信息|详情|资料)',
+        r'候选人[:：]\s*([\u4e00-\u9fa5A-Za-z·]{2,20}?)(?:的)?\s*简历',
+        r'([\u4e00-\u9fa5A-Za-z·]{2,20}?)(?:的)?\s*简历',
+    ]
+    for pattern in explicit_patterns:
+        explicit = re.search(pattern, text)
+        if explicit:
+            return explicit.group(1).strip()
     return None
 
 
@@ -545,6 +551,8 @@ def detect_intent(text: str) -> str:
         return 'daily_summary'
     if '哪个岗位投递的人最多' in text or '哪个岗位投递最多' in text or '各岗位' in text or '岗位统计' in text:
         return 'job_stats'
+    if '简历发我' in text or '简历发给我' in text or '简历给我' in text:
+        return 'send'
     if '发送给我' in text or '发给我' in text or ('发送' in text and ('候选人' in text or '信息' in text or '详情' in text or '汇总' in text or '摘要' in text)):
         return 'send'
     if 'top' in lowered or '优先联系' in text or '最合适' in text or '最值得' in text or '推荐' in text:
@@ -779,11 +787,14 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
                     candidates = find_candidates_by_name(refreshed, candidate_name or '', jd_title=jd_title) if candidate_name else []
                     records = refreshed
                 elif ensure_result.get('status') == 'processed-no-pass':
+                    evaluation = ensure_result.get('evaluation') or {}
                     basic_text = '\n'.join([
-                        f"候选人：{candidate_name}",
-                        f"邮件主题：{unread_matches[0].get('subject') or '未知'}",
-                        f"发件人：{unread_matches[0].get('sender') or '未知'}",
-                        '说明：已按单条下载并落地简历附件，但该候选人未通过当前自动评分门槛，所以没有进入正式通过名单。',
+                        f"候选人：{evaluation.get('candidate_name') or candidate_name}",
+                        f"匹配岗位：{evaluation.get('matched_jd_title') or '未命中岗位'}",
+                        f"评分：{evaluation.get('score') if evaluation.get('score') is not None else '暂无'} 分",
+                        f"评审摘要：{evaluation.get('summary') or '暂无'}",
+                        f"建议：{evaluation.get('recommendation') or '暂无'}",
+                        '说明：已按单条下载并完成完整评审，但该候选人未进入正式通过名单。',
                     ])
                     if intent == 'send':
                         text_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], basic_text)
@@ -793,7 +804,7 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
                         return {
                             'intent': intent,
                             'data': {'candidate_name': candidate_name, 'unreadMatch': unread_matches[0], 'ensure': ensure_result, 'send': {'text': text_send, 'files': file_sends}},
-                            'reply': f"已把候选人「{candidate_name}」的本地下载资料发送给你。\n\n" + basic_text,
+                            'reply': f"已把候选人「{candidate_name}」的评审结果和简历发送给你。\n\n" + basic_text,
                         }
                     return {
                         'intent': intent,
@@ -816,9 +827,13 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
         if not candidates:
             local_download = find_local_download_by_name(candidate_name, config_path=config_path)
             if local_download:
+                evaluation = local_download.get('evaluation') or {}
                 basic_text = '\n'.join([
-                    f"候选人：{candidate_name}",
-                    '说明：本地已找到该候选人的单条下载简历附件，但该候选人当前没有正式入库评分结果。',
+                    f"候选人：{evaluation.get('candidate_name') or candidate_name}",
+                    f"匹配岗位：{evaluation.get('matched_jd_title') or '未命中岗位'}",
+                    f"评分：{evaluation.get('score') if evaluation.get('score') is not None else '暂无'} 分",
+                    f"评审摘要：{evaluation.get('summary') or '暂无'}",
+                    f"建议：{evaluation.get('recommendation') or '暂无'}",
                     f"本地目录：{local_download.get('mailDir')}",
                 ])
                 if intent == 'send':

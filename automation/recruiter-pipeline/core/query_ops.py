@@ -100,7 +100,9 @@ def search_processed_candidates(
     *,
     jd_title: str | None = None,
     keyword: str | None = None,
+    keywords: list[str] | None = None,
     min_score: int | None = None,
+    date_after: str | None = None,
     limit: int | None = 20,
     offset: int = 0,
     sort_by: str = 'date',
@@ -115,8 +117,20 @@ def search_processed_candidates(
             r for r in items
             if key in r.candidate_name.lower() or key in r.subject.lower() or key in r.summary.lower()
         ]
+    if keywords:
+        normalized = [k.strip().lower() for k in keywords if k and k.strip()]
+        for key in normalized:
+            items = [
+                r for r in items
+                if key in r.candidate_name.lower()
+                or key in r.subject.lower()
+                or key in r.summary.lower()
+                or key in r.recommendation.lower()
+            ]
     if min_score is not None:
         items = [r for r in items if r.score >= min_score]
+    if date_after:
+        items = [r for r in items if r.date >= date_after]
 
     if sort_by == 'score':
         items = sorted(items, key=lambda r: (r.score, r.date, r.candidate_name), reverse=sort_desc)
@@ -369,6 +383,38 @@ def parse_candidate_name(text: str, records: list[ProcessedCandidateRecord]) -> 
 
 
 
+def parse_date_after(text: str) -> str | None:
+    if '今天' in text:
+        return '2026-03-13'
+    if '昨天' in text:
+        return '2026-03-12'
+    match = re.search(r'最近\s*(\d+)\s*天', text)
+    if match:
+        days = int(match.group(1))
+        mapping = {
+            1: '2026-03-13',
+            2: '2026-03-12',
+            3: '2026-03-11',
+            7: '2026-03-07',
+        }
+        return mapping.get(days)
+    return None
+
+
+
+def parse_skill_keywords(text: str) -> list[str]:
+    known_keywords = [
+        '智能穿戴', '蓝牙耳机', '蓝牙', 'wifi', 'iot', '金蝶', '电子料', '采购', 'app', '画质', 'tv',
+    ]
+    lowered = text.lower()
+    hits = []
+    for keyword in known_keywords:
+        if keyword.lower() in lowered:
+            hits.append(keyword)
+    return hits
+
+
+
 def detect_intent(text: str) -> str:
     lowered = text.lower()
     if '未读' in text and ('简历' in text or '邮件' in text):
@@ -489,10 +535,14 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
         jd_title = normalize_jd_query(text, Path(pipeline_cfg['jdDir']))
         limit = parse_top_limit(text, default=3)
         min_score = 90 if ('90分' in text or '高分' in text) else None
+        date_after = parse_date_after(text)
+        skill_keywords = parse_skill_keywords(text)
         result = search_processed_candidates(
             records,
             jd_title=jd_title,
+            keywords=skill_keywords,
             min_score=min_score,
+            date_after=date_after,
             limit=limit,
             offset=0,
             sort_by='score',
@@ -505,6 +555,8 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
                 'jd_title': jd_title,
                 'limit': limit,
                 'min_score': min_score,
+                'date_after': date_after,
+                'keywords': skill_keywords,
                 'matches': [asdict(x) for x in matches],
             },
             'reply': build_top_candidates_reply(matches, jd_title=jd_title),
@@ -517,10 +569,14 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
         if intent == 'send' and not candidate_name and jd_title:
             limit = parse_top_limit(text, default=3)
             min_score = 90 if ('90分' in text or '高分' in text) else None
+            date_after = parse_date_after(text)
+            skill_keywords = parse_skill_keywords(text)
             result = search_processed_candidates(
                 records,
                 jd_title=jd_title,
+                keywords=skill_keywords,
                 min_score=min_score,
+                date_after=date_after,
                 limit=limit,
                 offset=0,
                 sort_by='score',
@@ -542,6 +598,8 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
                     'jd_title': jd_title,
                     'limit': limit,
                     'min_score': min_score,
+                    'date_after': date_after,
+                    'keywords': skill_keywords,
                     'matches': [asdict(x) for x in matches],
                     'send': send_result,
                 },

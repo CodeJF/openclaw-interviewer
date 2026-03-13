@@ -326,6 +326,37 @@ def build_candidate_message(records: list[ProcessedCandidateRecord], *, detail: 
 
 
 
+def parse_top_limit(text: str, default: int = 3) -> int:
+    lowered = text.lower()
+    match = re.search(r'top\s*(\d+)', lowered)
+    if match:
+        value = int(match.group(1))
+        return value if value > 0 else default
+    patterns = [
+        r'前\s*(\d+)\s*(?:个|人|条)?',
+        r'(\d+)\s*(?:个|人|条)',
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, re.I)
+        if m:
+            value = int(m.group(1))
+            return value if value > 0 else default
+    return default
+
+
+
+def build_top_candidates_reply(records: list[ProcessedCandidateRecord], *, jd_title: str | None = None) -> str:
+    if not records:
+        return '没有找到符合条件的高优先级候选人。'
+    title = jd_title or records[0].matched_jd_title
+    lines = [f'推荐优先联系候选人（{title}）：']
+    for idx, rec in enumerate(records, start=1):
+        reason = rec.recommendation or rec.summary or '暂无推荐理由'
+        lines.append(f"{idx}. {rec.candidate_name}｜{rec.score}分｜{rec.date}\n   理由：{reason}")
+    return '\n'.join(lines)
+
+
+
 def parse_candidate_name(text: str, records: list[ProcessedCandidateRecord]) -> str | None:
     sorted_names = sorted({r.candidate_name.strip() for r in records if r.candidate_name.strip()}, key=len, reverse=True)
     for name in sorted_names:
@@ -342,10 +373,12 @@ def detect_intent(text: str) -> str:
     lowered = text.lower()
     if '未读' in text and ('简历' in text or '邮件' in text):
         return 'unread'
-    if '发送给我' in text or '发给我' in text or ('发送' in text and ('候选人' in text or '信息' in text or '详情' in text)):
-        return 'send'
     if '哪个岗位投递的人最多' in text or '哪个岗位投递最多' in text or '各岗位' in text or '岗位统计' in text:
         return 'job_stats'
+    if '发送给我' in text or '发给我' in text or ('发送' in text and ('候选人' in text or '信息' in text or '详情' in text)):
+        return 'send'
+    if 'top' in lowered or '优先联系' in text or '最合适' in text or '最值得' in text:
+        return 'top'
     if '详情' in text or '什么情况' in text or '为什么高分' in text or ('信息' in text and '发送' not in text and '发给我' not in text):
         return 'detail'
     if '继续处理' in text or ('处理' in text and '封' in text):
@@ -452,9 +485,69 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
             'reply': format_job_stats(stats),
         }
 
+    if intent in {'top', 'highscore'}:
+        jd_title = normalize_jd_query(text, Path(pipeline_cfg['jdDir']))
+        limit = parse_top_limit(text, default=3)
+        min_score = 90 if ('90分' in text or '高分' in text) else None
+        result = search_processed_candidates(
+            records,
+            jd_title=jd_title,
+            min_score=min_score,
+            limit=limit,
+            offset=0,
+            sort_by='score',
+            sort_desc=True,
+        )
+        matches = result['items']
+        return {
+            'intent': intent,
+            'data': {
+                'jd_title': jd_title,
+                'limit': limit,
+                'min_score': min_score,
+                'matches': [asdict(x) for x in matches],
+            },
+            'reply': build_top_candidates_reply(matches, jd_title=jd_title),
+        }
+
     if intent in {'detail', 'send'}:
         jd_title = normalize_jd_query(text, Path(pipeline_cfg['jdDir']))
         candidate_name = parse_candidate_name(text, records)
+
+        if intent == 'send' and not candidate_name and jd_title:
+            limit = parse_top_limit(text, default=3)
+            min_score = 90 if ('90分' in text or '高分' in text) else None
+            result = search_processed_candidates(
+                records,
+                jd_title=jd_title,
+                min_score=min_score,
+                limit=limit,
+                offset=0,
+                sort_by='score',
+                sort_desc=True,
+            )
+            matches = result['items']
+            if not matches:
+                return {
+                    'intent': intent,
+                    'data': {'candidate_name': None, 'jd_title': jd_title, 'matches': []},
+                    'reply': f'岗位「{jd_title}」暂时没有可发送的候选人。',
+                }
+            message_text = build_candidate_message(matches, detail=True)
+            send_result = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], message_text)
+            return {
+                'intent': intent,
+                'data': {
+                    'candidate_name': None,
+                    'jd_title': jd_title,
+                    'limit': limit,
+                    'min_score': min_score,
+                    'matches': [asdict(x) for x in matches],
+                    'send': send_result,
+                },
+                'reply': f'已把岗位「{jd_title}」的候选人信息发送给你。\n\n' + message_text,
+            }
+
         candidates = find_candidates_by_name(records, candidate_name or '', jd_title=jd_title) if candidate_name else []
         if not candidate_name:
             return {

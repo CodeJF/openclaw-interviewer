@@ -471,6 +471,13 @@ def parse_candidate_name(text: str, records: list[ProcessedCandidateRecord]) -> 
     for name in sorted_names:
         if name and name in text:
             return name
+
+    def _clean_candidate_name(raw: str) -> str:
+        cleaned = raw.strip()
+        cleaned = re.sub(r'^(把|将|给我|麻烦把|请把|帮我把|帮我|请)\s*', '', cleaned)
+        cleaned = re.sub(r'\s*(发我|发给我|给我|信息|详情|资料)$', '', cleaned)
+        return cleaned.strip()
+
     explicit_patterns = [
         r'把?\s*([\u4e00-\u9fa5A-Za-z·]{2,20}?)(?:的)?\s*(?:信息|详情|资料)',
         r'候选人[:：]\s*([\u4e00-\u9fa5A-Za-z·]{2,20}?)(?:的)?\s*简历',
@@ -479,7 +486,9 @@ def parse_candidate_name(text: str, records: list[ProcessedCandidateRecord]) -> 
     for pattern in explicit_patterns:
         explicit = re.search(pattern, text)
         if explicit:
-            return explicit.group(1).strip()
+            cleaned = _clean_candidate_name(explicit.group(1))
+            if cleaned:
+                return cleaned
     return None
 
 

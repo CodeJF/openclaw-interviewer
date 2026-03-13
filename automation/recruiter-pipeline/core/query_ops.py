@@ -697,20 +697,27 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
 
     jd_title = normalize_jd_query(text, Path(pipeline_cfg['jdDir']))
     min_score = 90 if intent == 'highscore' else None
+    date_after = parse_date_after(text)
+    skill_keywords = parse_skill_keywords(text)
     search_limit = parse_search_limit(text, default=20)
     search_page = parse_search_page(text)
     search_offset = parse_search_offset(text, search_limit, search_page)
     sort_by, sort_desc = parse_search_sort(text)
     keyword = None
     if not jd_title:
-        cleaned = re.sub(r'[查找帮我是否有的候选人岗位高分前后最近刚才上次全部所有第页个人条按分数最高最低最新最早]+', ' ', text)
+        cleaned = re.sub(r'[查找帮我是否有的候选人岗位高分前后最近刚才上次全部所有第页个人条按分数最高最低最新最早经验做过会]+', ' ', text)
+        for token in skill_keywords:
+            cleaned = cleaned.replace(token, ' ')
         cleaned = re.sub(r'\d+', ' ', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned)
         keyword = cleaned.strip() or None
     search_result = search_processed_candidates(
         records,
         jd_title=jd_title,
         keyword=keyword,
+        keywords=skill_keywords,
         min_score=min_score,
+        date_after=date_after,
         limit=search_limit,
         offset=search_offset,
         sort_by=sort_by,
@@ -752,6 +759,8 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
         'data': {
             'jd_title': jd_title,
             'keyword': keyword,
+            'keywords': skill_keywords,
+            'date_after': date_after,
             'total': total,
             'shown': shown,
             'limit': limit,

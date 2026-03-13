@@ -19,6 +19,42 @@ def connect_imap(cfg: dict[str, Any]):
     return client
 
 
+def fetch_mail_by_uid(client: imaplib.IMAP4, uid: str) -> MailItem | None:
+    status, _ = client.select('INBOX')
+    if status != 'OK':
+        raise PipelineError('Unable to select INBOX')
+    status, parts = client.uid('fetch', uid, '(RFC822)')
+    if status != 'OK' or not parts or not parts[0]:
+        return None
+    raw = parts[0][1]
+    msg = email.message_from_bytes(raw, policy=email.policy.default)
+    return MailItem(uid=uid, message=msg)
+
+
+
+def search_unread_header_items(client: imaplib.IMAP4, limit: int = 20) -> list[dict[str, Any]]:
+    status, _ = client.select('INBOX')
+    if status != 'OK':
+        raise PipelineError('Unable to select INBOX')
+    status, data = client.uid('search', None, 'UNSEEN')
+    if status != 'OK':
+        raise PipelineError('Unable to search unseen messages')
+    uids = [u.decode() for u in data[0].split() if u]
+    items: list[dict[str, Any]] = []
+    for uid in list(reversed(uids))[:limit]:
+        status, parts = client.uid('fetch', uid, '(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])')
+        if status != 'OK' or not parts or not parts[0]:
+            continue
+        raw = parts[0][1].decode('utf-8', errors='ignore')
+        from_match = next((line[5:].strip() for line in raw.splitlines() if line.lower().startswith('from:')), '')
+        subject_match = next((line[8:].strip() for line in raw.splitlines() if line.lower().startswith('subject:')), '')
+        date_match = next((line[5:].strip() for line in raw.splitlines() if line.lower().startswith('date:')), '')
+        name, _addr = email.utils.parseaddr(from_match)
+        items.append({'uid': uid, 'sender': from_match, 'candidate_name': name, 'subject': subject_match, 'date': date_match})
+    return items
+
+
+
 def fetch_unseen_messages(client: imaplib.IMAP4, max_emails: int | None = None, cfg: dict[str, Any] | None = None) -> list[MailItem]:
     status, _ = client.select('INBOX')
     if status != 'OK':

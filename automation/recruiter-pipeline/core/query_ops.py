@@ -13,6 +13,7 @@ from .common import load_json
 from .imap_client import connect_imap
 from .io_ops import load_jds
 from .notifier import send_message
+from .pipeline_ops import ensure_candidate_local_by_uid, find_local_download_by_name, find_unread_candidate_by_name
 
 
 @dataclass
@@ -164,7 +165,7 @@ def decode_mime_header(value: str) -> str:
 
 
 
-def list_unread_resumes(mail_cfg: dict[str, Any], limit: int = 20) -> dict[str, Any]:
+def list_unread_resumes(mail_cfg: dict[str, Any], processed_root: Path | None = None, limit: int = 20) -> dict[str, Any]:
     client = connect_imap(mail_cfg)
     try:
         status, _ = client.select('INBOX')
@@ -175,6 +176,14 @@ def list_unread_resumes(mail_cfg: dict[str, Any], limit: int = 20) -> dict[str, 
             return {'count': -1, 'items': [], 'error': 'Unable to search UNSEEN'}
         uids = [u.decode() for u in data[0].split() if u]
         items = []
+        local_uids: set[str] = set()
+        if processed_root and processed_root.exists():
+            for mail_path in processed_root.rglob('mail.json'):
+                try:
+                    mail = load_json(mail_path)
+                    local_uids.add(str(mail.get('uid') or ''))
+                except Exception:
+                    continue
         for uid in list(reversed(uids))[:limit]:
             status, parts = client.uid('fetch', uid, '(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])')
             if status != 'OK' or not parts or not parts[0]:
@@ -185,7 +194,7 @@ def list_unread_resumes(mail_cfg: dict[str, Any], limit: int = 20) -> dict[str, 
             sender = decode_mime_header(from_match.group(1).strip()) if from_match else ''
             subject = decode_mime_header(subject_match.group(1).strip()) if subject_match else ''
             name, _addr = email.utils.parseaddr(sender)
-            items.append({'uid': uid, 'sender': sender, 'candidate_name': name, 'subject': subject})
+            items.append({'uid': uid, 'sender': sender, 'candidate_name': name, 'subject': subject, 'cached': uid in local_uids})
         return {'count': len(uids), 'items': items}
     finally:
         try:
@@ -409,6 +418,23 @@ def build_candidate_message(records: list[ProcessedCandidateRecord], *, detail: 
 
 
 
+def collect_candidate_files(work_dir: str) -> list[str]:
+    base = Path(work_dir)
+    if not base.exists():
+        return []
+    files = []
+    preferred_suffixes = {'.pdf', '.doc', '.docx', '.zip'}
+    for path in sorted(base.iterdir()):
+        if not path.is_file():
+            continue
+        if path.name in {'result.json', 'mail.json', 'candidate_material.txt'}:
+            continue
+        if path.suffix.lower() in preferred_suffixes:
+            files.append(str(path))
+    return files
+
+
+
 def parse_top_limit(text: str, default: int = 3) -> int:
     lowered = text.lower()
     match = re.search(r'top\s*(\d+)', lowered)
@@ -445,7 +471,7 @@ def parse_candidate_name(text: str, records: list[ProcessedCandidateRecord]) -> 
     for name in sorted_names:
         if name and name in text:
             return name
-    explicit = re.search(r'把?\s*([\u4e00-\u9fa5A-Za-z·]{2,20})\s*(?:的)?(?:信息|详情|资料)', text)
+    explicit = re.search(r'把?\s*([\u4e00-\u9fa5A-Za-z·]{2,20}?)(?:的)?\s*(?:信息|详情|资料)', text)
     if explicit:
         return explicit.group(1).strip()
     return None
@@ -611,13 +637,13 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     records = load_processed_candidates(processed_root)
 
     if intent == 'unread':
-        unread = list_unread_resumes(config['mail'])
+        unread = list_unread_resumes(config['mail'], processed_root=processed_root)
         return {
             'intent': intent,
             'data': unread,
             'reply': '当前未读简历：{count} 封\n\n{items}'.format(
                 count=unread.get('count', 0),
-                items='\n'.join([f"- UID {i['uid']}｜{i.get('candidate_name') or i['sender']}｜{i['subject']}" for i in unread.get('items', [])]) or '暂无样本列表',
+                items='\n'.join([f"- UID {i['uid']}｜{i.get('candidate_name') or i['sender']}｜{i['subject']}｜本地{'已缓存' if i.get('cached') else '未缓存'}" for i in unread.get('items', [])]) or '暂无样本列表',
             ),
         }
 
@@ -745,6 +771,71 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
                 'reply': '请告诉我候选人姓名，或直接说“把张三的信息发我”。',
             }
         if not candidates:
+            unread_matches = find_unread_candidate_by_name(candidate_name, config_path=config_path)
+            if len(unread_matches) == 1:
+                ensure_result = ensure_candidate_local_by_uid(unread_matches[0]['uid'], config_path=config_path)
+                if ensure_result.get('status') in {'existing', 'processed'}:
+                    refreshed = load_processed_candidates(processed_root)
+                    candidates = find_candidates_by_name(refreshed, candidate_name or '', jd_title=jd_title) if candidate_name else []
+                    records = refreshed
+                elif ensure_result.get('status') == 'processed-no-pass':
+                    basic_text = '\n'.join([
+                        f"候选人：{candidate_name}",
+                        f"邮件主题：{unread_matches[0].get('subject') or '未知'}",
+                        f"发件人：{unread_matches[0].get('sender') or '未知'}",
+                        '说明：已按单条下载并落地简历附件，但该候选人未通过当前自动评分门槛，所以没有进入正式通过名单。',
+                    ])
+                    if intent == 'send':
+                        text_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], basic_text)
+                        file_sends = []
+                        for file_path in ensure_result.get('attachments', []):
+                            file_sends.append(send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], '', media=file_path))
+                        return {
+                            'intent': intent,
+                            'data': {'candidate_name': candidate_name, 'unreadMatch': unread_matches[0], 'ensure': ensure_result, 'send': {'text': text_send, 'files': file_sends}},
+                            'reply': f"已把候选人「{candidate_name}」的本地下载资料发送给你。\n\n" + basic_text,
+                        }
+                    return {
+                        'intent': intent,
+                        'data': {'candidate_name': candidate_name, 'unreadMatch': unread_matches[0], 'ensure': ensure_result},
+                        'reply': basic_text,
+                    }
+                else:
+                    return {
+                        'intent': intent,
+                        'data': {'candidate_name': candidate_name, 'unreadMatch': unread_matches[0], 'ensure': ensure_result},
+                        'reply': f"候选人「{candidate_name}」已定位到未读邮件，但暂时无法完成单条下载处理（状态：{ensure_result.get('status')}）。",
+                    }
+            elif len(unread_matches) > 1:
+                return {
+                    'intent': intent,
+                    'data': {'candidate_name': candidate_name, 'unreadMatches': unread_matches},
+                    'reply': f"在未读邮件里找到多位候选人「{candidate_name}」，请进一步确认：\n" + '\n'.join([f"- UID {x['uid']}｜{x.get('candidate_name') or x.get('sender')}｜{x.get('subject')}" for x in unread_matches]),
+                }
+
+        if not candidates:
+            local_download = find_local_download_by_name(candidate_name, config_path=config_path)
+            if local_download:
+                basic_text = '\n'.join([
+                    f"候选人：{candidate_name}",
+                    '说明：本地已找到该候选人的单条下载简历附件，但该候选人当前没有正式入库评分结果。',
+                    f"本地目录：{local_download.get('mailDir')}",
+                ])
+                if intent == 'send':
+                    text_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], basic_text)
+                    file_sends = []
+                    for file_path in local_download.get('attachments', []):
+                        file_sends.append(send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], '', media=file_path))
+                    return {
+                        'intent': intent,
+                        'data': {'candidate_name': candidate_name, 'localDownload': local_download, 'send': {'text': text_send, 'files': file_sends}},
+                        'reply': f"已把候选人「{candidate_name}」的本地简历附件发送给你。\n\n" + basic_text,
+                    }
+                return {
+                    'intent': intent,
+                    'data': {'candidate_name': candidate_name, 'localDownload': local_download},
+                    'reply': basic_text,
+                }
             return {
                 'intent': intent,
                 'data': {'candidate_name': candidate_name, 'matches': []},
@@ -767,12 +858,15 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
 
         message_text = build_candidate_message(candidates, detail=True)
         send_result = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], message_text)
+        sent_files: list[dict[str, Any]] = []
+        for file_path in collect_candidate_files(target.work_dir):
+            sent_files.append(send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], '', media=file_path))
         return {
             'intent': intent,
             'data': {
                 'candidate_name': candidate_name,
                 'match': asdict(target),
-                'send': send_result,
+                'send': {'text': send_result, 'files': sent_files},
             },
             'reply': f'已把候选人「{target.candidate_name}」的信息发送给你。\n\n' + message_text,
         }

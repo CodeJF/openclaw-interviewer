@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,12 +12,11 @@ from core.common import dump_json, load_json, sanitize_filename
 from core.config import DEFAULT_CONFIG
 from core.imap_client import connect_imap, ensure_seen, fetch_unseen_messages, get_remaining_unread
 from core.io_ops import ensure_runtime_dirs, load_jds, package_results
-from core.matching import choose_band, prefilter_candidate
 from core.models import CandidateResult, MailItem, ParsedCandidate, PipelineError
 from core.notifier import build_candidate_list, build_processed_mail_list, build_summary, send_message
+from core.pipeline_ops import process_candidate
 from core.reporting import build_excel_report
 from core.resume_parser import parse_mail_item
-from core.reviewer import build_prompt, call_interviewer
 
 
 def load_state(state_path: Path) -> dict:
@@ -29,52 +27,6 @@ def load_state(state_path: Path) -> dict:
 
 def save_state(state_path: Path, state: dict) -> None:
     dump_json(state_path, state)
-
-
-def process_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, bands, *, llm_top_k: int, min_llm_score: int) -> CandidateResult | None:
-    shortlist_jds, prefilter_meta = prefilter_candidate(candidate, jds, top_k=llm_top_k, min_llm_score=min_llm_score)
-    if not prefilter_meta.get('should_review'):
-        return None
-
-    prompt = build_prompt(candidate, shortlist_jds, prefilter_meta)
-    result = call_interviewer(prompt)
-    score = int(result['score'])
-    band = choose_band(score, bands)
-    if not band:
-        return None
-
-    jd_title = str(result['matched_jd_title']).strip()
-    summary = str(result.get('summary') or '').strip()
-    recommendation = str(result.get('recommendation') or '').strip()
-    candidate_name = sanitize_filename(str(result.get('candidate_name') or candidate.candidate_name), candidate.uid)
-
-    work_dir = dirs['processed'] / datetime.now().strftime('%Y-%m-%d') / sanitize_filename(jd_title) / band / candidate_name
-    work_dir.mkdir(parents=True, exist_ok=True)
-    dump_json(work_dir / 'result.json', result)
-    dump_json(work_dir / 'mail.json', {
-        'uid': candidate.uid,
-        'subject': candidate.subject,
-        'sender': candidate.sender,
-        'documents': candidate.documents,
-        'prefilter': prefilter_meta,
-    })
-    (work_dir / 'candidate_material.txt').write_text(candidate.candidate_text, encoding='utf-8')
-    for attachment in candidate.attachments:
-        shutil.copy2(attachment, work_dir / attachment.name)
-
-    return CandidateResult(
-        mail_uid=candidate.uid,
-        sender=candidate.sender,
-        subject=candidate.subject,
-        matched_jd_title=jd_title,
-        score=score,
-        band=band,
-        candidate_name=candidate_name,
-        summary=summary,
-        recommendation=recommendation,
-        raw_result=result,
-        work_dir=work_dir,
-    )
 
 
 def main() -> int:

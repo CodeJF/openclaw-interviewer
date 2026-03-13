@@ -29,9 +29,19 @@ def extract_attachments(msg: Message, target_dir: Path) -> list[Path]:
 def ensure_pdf_support():
     try:
         from pypdf import PdfReader  # type: ignore
-    except Exception as exc:
-        raise PipelineError('Missing dependency pypdf. Run pip install -r requirements.txt') from exc
-    return PdfReader
+        return PdfReader
+    except Exception:
+        project_root = Path(__file__).resolve().parents[1]
+        for site_pkg in (project_root / '.venv' / 'lib').glob('python*/site-packages'):
+            import sys
+            site_pkg_str = str(site_pkg)
+            if site_pkg_str not in sys.path:
+                sys.path.insert(0, site_pkg_str)
+        try:
+            from pypdf import PdfReader  # type: ignore
+            return PdfReader
+        except Exception as exc:
+            raise PipelineError('Missing dependency pypdf. Run pip install -r requirements.txt') from exc
 
 
 def extract_text_from_pdf(path: Path) -> str:

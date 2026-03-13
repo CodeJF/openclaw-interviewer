@@ -101,6 +101,9 @@ def search_processed_candidates(
     keyword: str | None = None,
     min_score: int | None = None,
     limit: int | None = 20,
+    offset: int = 0,
+    sort_by: str = 'date',
+    sort_desc: bool = True,
 ) -> dict[str, Any]:
     items = records
     if jd_title:
@@ -114,12 +117,22 @@ def search_processed_candidates(
     if min_score is not None:
         items = [r for r in items if r.score >= min_score]
 
+    if sort_by == 'score':
+        items = sorted(items, key=lambda r: (r.score, r.date, r.candidate_name), reverse=sort_desc)
+    else:
+        items = sorted(items, key=lambda r: (r.date, r.score, r.candidate_name), reverse=sort_desc)
+
     total = len(items)
-    shown = items if limit is None else items[:limit]
+    safe_offset = max(offset, 0)
+    paged = items[safe_offset:] if safe_offset else items
+    shown = paged if limit is None else paged[:limit]
     return {
         'total': total,
         'shown': len(shown),
         'limit': limit,
+        'offset': safe_offset,
+        'sortBy': sort_by,
+        'sortDesc': sort_desc,
         'items': shown,
     }
 
@@ -231,6 +244,7 @@ def parse_search_limit(text: str, default: int = 20) -> int | None:
     patterns = [
         r'前\s*(\d+)\s*(?:个|人|条)?',
         r'最近\s*(\d+)\s*(?:个|人|条)?',
+        r'后\s*(\d+)\s*(?:个|人|条)?',
         r'(\d+)\s*(?:个|人|条)',
     ]
     for pattern in patterns:
@@ -239,6 +253,45 @@ def parse_search_limit(text: str, default: int = 20) -> int | None:
             value = int(match.group(1))
             return value if value > 0 else default
     return default
+
+
+
+def parse_search_page(text: str) -> int:
+    match = re.search(r'第\s*(\d+)\s*页', text, re.I)
+    if match:
+        return max(int(match.group(1)), 1)
+    return 1
+
+
+
+def parse_search_offset(text: str, limit: int | None, page: int) -> int:
+    if limit is None:
+        return 0
+    if '下一页' in text:
+        return limit
+    if '上一页' in text:
+        return max(0, limit * (page - 2))
+    if '后' in text:
+        match = re.search(r'后\s*(\d+)\s*(?:个|人|条)?', text, re.I)
+        if match:
+            return max(int(match.group(1)), 0)
+    return max(0, limit * (page - 1))
+
+
+
+def parse_search_sort(text: str) -> tuple[str, bool]:
+    lowered = text.lower()
+    if '分数最低' in text or '低分' in text:
+        return 'score', False
+    if '分数最高' in text or '最高分' in text or '高分' in text:
+        return 'score', True
+    if '最早' in text or '最旧' in text:
+        return 'date', False
+    if '最新' in text or '最近' in text:
+        return 'date', True
+    if '按分数' in text:
+        return 'score', True
+    return 'date', True
 
 
 
@@ -286,9 +339,12 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     jd_title = normalize_jd_query(text, Path(pipeline_cfg['jdDir']))
     min_score = 90 if intent == 'highscore' else None
     search_limit = parse_search_limit(text, default=20)
+    search_page = parse_search_page(text)
+    search_offset = parse_search_offset(text, search_limit, search_page)
+    sort_by, sort_desc = parse_search_sort(text)
     keyword = None
     if not jd_title:
-        cleaned = re.sub(r'[查找帮我是否有的候选人岗位高分90分以上最近刚才上次全部所有前个人条]+', ' ', text)
+        cleaned = re.sub(r'[查找帮我是否有的候选人岗位高分前后最近刚才上次全部所有第页个人条按分数最高最低最新最早]+', ' ', text)
         cleaned = re.sub(r'\d+', ' ', cleaned)
         keyword = cleaned.strip() or None
     search_result = search_processed_candidates(
@@ -297,23 +353,40 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
         keyword=keyword,
         min_score=min_score,
         limit=search_limit,
+        offset=search_offset,
+        sort_by=sort_by,
+        sort_desc=sort_desc,
     )
     matches = search_result['items']
     total = int(search_result['total'])
     shown = int(search_result['shown'])
     raw_limit = search_result['limit']
     limit = int(raw_limit) if raw_limit is not None else None
+    offset = int(search_result.get('offset', 0) or 0)
+    sort_by = str(search_result.get('sortBy') or 'date')
+    sort_desc = bool(search_result.get('sortDesc', True))
     title = jd_title or (f'关键词「{keyword}」' if keyword else '条件')
 
     if total == 0:
         reply = f"查询结果（{title}）：\n没有找到符合条件的候选人。"
     else:
-        header = f"查询结果（{title}）：共 {total} 人"
-        if limit is None:
-            header += "，当前展示全部结果"
-        elif total > shown:
-            header += f"，当前展示前 {shown} 人（上限 {limit}）"
-        reply = header + "\n" + format_candidates(matches)
+        sort_label = '按分数' if sort_by == 'score' else '按时间'
+        sort_label += '降序' if sort_desc else '升序'
+
+        if shown == 0:
+            header = f"查询结果（{title}）：共 {total} 人，当前页无结果，{sort_label}"
+            if limit is not None:
+                header += f"（偏移 {offset}，每页/本次上限 {limit}）"
+            reply = header
+        else:
+            start_no = offset + 1
+            end_no = offset + shown
+            header = f"查询结果（{title}）：共 {total} 人，当前第 {start_no}-{end_no} 人，{sort_label}"
+            if limit is None:
+                header += "，当前展示全部结果"
+            elif total > shown + offset:
+                header += f"，本页展示 {shown} 人（每页/本次上限 {limit}）"
+            reply = header + "\n" + format_candidates(matches)
 
     return {
         'intent': intent,
@@ -323,6 +396,9 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
             'total': total,
             'shown': shown,
             'limit': limit,
+            'offset': offset,
+            'sortBy': sort_by,
+            'sortDesc': sort_desc,
             'matches': [asdict(x) for x in matches],
         },
         'reply': reply,

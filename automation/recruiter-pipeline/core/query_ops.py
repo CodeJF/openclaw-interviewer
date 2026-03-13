@@ -388,13 +388,30 @@ def parse_date_after(text: str) -> str | None:
         return '2026-03-13'
     if '昨天' in text:
         return '2026-03-12'
-    match = re.search(r'最近\s*(\d+)\s*天', text)
+    if '最近一周' in text or '最近七天' in text:
+        return '2026-03-07'
+
+    match = re.search(r'最近\s*([一二两三四五六七\d]+)\s*天', text)
     if match:
-        days = int(match.group(1))
+        raw = match.group(1)
+        cn_map = {
+            '一': 1,
+            '二': 2,
+            '两': 2,
+            '三': 3,
+            '四': 4,
+            '五': 5,
+            '六': 6,
+            '七': 7,
+        }
+        days = int(raw) if raw.isdigit() else cn_map.get(raw)
         mapping = {
             1: '2026-03-13',
             2: '2026-03-12',
             3: '2026-03-11',
+            4: '2026-03-10',
+            5: '2026-03-09',
+            6: '2026-03-08',
             7: '2026-03-07',
         }
         return mapping.get(days)
@@ -403,14 +420,24 @@ def parse_date_after(text: str) -> str | None:
 
 
 def parse_skill_keywords(text: str) -> list[str]:
-    known_keywords = [
-        '智能穿戴', '蓝牙耳机', '蓝牙', 'wifi', 'iot', '金蝶', '电子料', '采购', 'app', '画质', 'tv',
-    ]
+    alias_groups = {
+        '智能穿戴': ['智能穿戴', '手表', '手环', '穿戴'],
+        '蓝牙耳机': ['蓝牙耳机', '耳机', 'tws'],
+        '蓝牙': ['蓝牙', 'ble'],
+        'wifi': ['wifi', 'wi-fi'],
+        'iot': ['iot', '物联网', '智能家居'],
+        '金蝶': ['金蝶'],
+        '电子料': ['电子料', '电子元器件', '元器件', 'ic料'],
+        '采购': ['采购', '供应链'],
+        'app': ['app', 'android', 'ios', 'flutter', 'react native'],
+        '画质': ['画质', 'pq', '显示', '背光', 'gamma'],
+        'tv': ['tv', '电视', '显示器'],
+    }
     lowered = text.lower()
     hits = []
-    for keyword in known_keywords:
-        if keyword.lower() in lowered:
-            hits.append(keyword)
+    for canonical, aliases in alias_groups.items():
+        if any(alias.lower() in lowered for alias in aliases):
+            hits.append(canonical)
     return hits
 
 
@@ -423,7 +450,7 @@ def detect_intent(text: str) -> str:
         return 'job_stats'
     if '发送给我' in text or '发给我' in text or ('发送' in text and ('候选人' in text or '信息' in text or '详情' in text)):
         return 'send'
-    if 'top' in lowered or '优先联系' in text or '最合适' in text or '最值得' in text:
+    if 'top' in lowered or '优先联系' in text or '最合适' in text or '最值得' in text or '推荐' in text:
         return 'top'
     if '详情' in text or '什么情况' in text or '为什么高分' in text or ('信息' in text and '发送' not in text and '发给我' not in text):
         return 'detail'

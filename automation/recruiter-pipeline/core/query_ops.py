@@ -100,7 +100,7 @@ def search_processed_candidates(
     jd_title: str | None = None,
     keyword: str | None = None,
     min_score: int | None = None,
-    limit: int = 20,
+    limit: int | None = 20,
 ) -> dict[str, Any]:
     items = records
     if jd_title:
@@ -115,7 +115,7 @@ def search_processed_candidates(
         items = [r for r in items if r.score >= min_score]
 
     total = len(items)
-    shown = items[:limit]
+    shown = items if limit is None else items[:limit]
     return {
         'total': total,
         'shown': len(shown),
@@ -223,6 +223,25 @@ def parse_limit(text: str, default: int = 20) -> int:
 
 
 
+def parse_search_limit(text: str, default: int = 20) -> int | None:
+    lowered = text.lower()
+    if any(token in lowered for token in ['全部', '所有', 'all']):
+        return None
+
+    patterns = [
+        r'前\s*(\d+)\s*(?:个|人|条)?',
+        r'最近\s*(\d+)\s*(?:个|人|条)?',
+        r'(\d+)\s*(?:个|人|条)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            value = int(match.group(1))
+            return value if value > 0 else default
+    return default
+
+
+
 def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     config = load_json(config_path)
     pipeline_cfg = config['pipeline']
@@ -266,22 +285,33 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     records = load_processed_candidates(processed_root)
     jd_title = normalize_jd_query(text, Path(pipeline_cfg['jdDir']))
     min_score = 90 if intent == 'highscore' else None
+    search_limit = parse_search_limit(text, default=20)
     keyword = None
     if not jd_title:
-        cleaned = re.sub(r'[查找帮我是否有的候选人岗位高分90分以上最近刚才上次]+', ' ', text)
+        cleaned = re.sub(r'[查找帮我是否有的候选人岗位高分90分以上最近刚才上次全部所有前个人条]+', ' ', text)
+        cleaned = re.sub(r'\d+', ' ', cleaned)
         keyword = cleaned.strip() or None
-    search_result = search_processed_candidates(records, jd_title=jd_title, keyword=keyword, min_score=min_score)
+    search_result = search_processed_candidates(
+        records,
+        jd_title=jd_title,
+        keyword=keyword,
+        min_score=min_score,
+        limit=search_limit,
+    )
     matches = search_result['items']
     total = int(search_result['total'])
     shown = int(search_result['shown'])
-    limit = int(search_result['limit'])
+    raw_limit = search_result['limit']
+    limit = int(raw_limit) if raw_limit is not None else None
     title = jd_title or (f'关键词「{keyword}」' if keyword else '条件')
 
     if total == 0:
         reply = f"查询结果（{title}）：\n没有找到符合条件的候选人。"
     else:
         header = f"查询结果（{title}）：共 {total} 人"
-        if total > shown:
+        if limit is None:
+            header += "，当前展示全部结果"
+        elif total > shown:
             header += f"，当前展示前 {shown} 人（上限 {limit}）"
         reply = header + "\n" + format_candidates(matches)
 

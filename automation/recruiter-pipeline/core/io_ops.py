@@ -6,6 +6,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
+from .common import dump_json, load_json
 from .models import JDEntry, PipelineError
 
 
@@ -65,3 +66,73 @@ def package_results(result_dirs: list[Path], outbox_dir: Path) -> Path:
             shutil.copytree(src_dir, dst_dir, dirs_exist_ok=False)
         shutil.make_archive(str(base_name), 'zip', root_dir=tmp_path)
     return zip_path
+
+
+
+def decode_mime_header(value: str) -> str:
+    import email.header
+    parts = []
+    for chunk, charset in email.header.decode_header(value):
+        if isinstance(chunk, bytes):
+            parts.append(chunk.decode(charset or 'utf-8', errors='ignore'))
+        else:
+            parts.append(chunk)
+    return ''.join(parts).strip()
+
+
+def build_mail_header_index(mail_cfg: dict[str, Any], state_dir: Path, limit: int = 200) -> dict[str, Any]:
+    import imaplib
+    import email.utils
+    from .imap_client import connect_imap
+    state_dir.mkdir(parents=True, exist_ok=True)
+    index_path = state_dir / 'mail-header-index.json'
+
+    client = connect_imap(mail_cfg)
+    try:
+        status, _ = client.select('INBOX')
+        if status != 'OK':
+            return {'updatedAt': datetime.now().isoformat(), 'count': 0, 'items': []}
+
+        all_items = []
+        for criterion, seen_flag in (('UNSEEN', False), ('SEEN', True)):
+            try:
+                status, data = client.uid('search', None, criterion)
+                if status != 'OK':
+                    continue
+                uids = [u.decode() for u in data[0].split() if u]
+                uids = list(reversed(uids[:limit]))
+                for uid in uids:
+                    status, parts = client.uid('fetch', uid, '(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])')
+                    if status != 'OK' or not parts or not parts[0]:
+                        continue
+                    raw = parts[0][1].decode('utf-8', errors='ignore')
+                    from_match = next((line[5:].strip() for line in raw.splitlines() if line.lower().startswith('from:')), '')
+                    subject_match = next((line[8:].strip() for line in raw.splitlines() if line.lower().startswith('subject:')), '')
+                    date_match = next((line[5:].strip() for line in raw.splitlines() if line.lower().startswith('date:')), '')
+                    from_decoded = decode_mime_header(from_match)
+                    subject_decoded = decode_mime_header(subject_match)
+                    name_from_header, _addr = email.utils.parseaddr(from_decoded)
+                    all_items.append({
+                        'uid': uid,
+                        'sender': from_decoded,
+                        'candidate_name': name_from_header,
+                        'subject': subject_decoded,
+                        'date': date_match,
+                        'seen': seen_flag,
+                    })
+            except Exception:
+                continue
+    finally:
+        try:
+            client.logout()
+        except Exception:
+            pass
+
+    all_items.sort(key=lambda x: int(x.get('uid', 0)), reverse=True)
+    index_data = {
+        'updatedAt': datetime.now().isoformat(),
+        'count': len(all_items),
+        'items': all_items,
+    }
+    dump_json(index_path, index_data)
+    return index_data

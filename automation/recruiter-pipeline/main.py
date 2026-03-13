@@ -11,9 +11,10 @@ from pathlib import Path
 from core.common import dump_json, load_json, sanitize_filename
 from core.config import DEFAULT_CONFIG
 from core.imap_client import connect_imap, ensure_seen, fetch_unseen_messages, get_remaining_unread
-from core.io_ops import ensure_runtime_dirs, load_jds, package_results
+from core.io_ops import build_mail_header_index, ensure_runtime_dirs, load_jds, package_results
 from core.models import CandidateResult, MailItem, ParsedCandidate, PipelineError
 from core.notifier import build_candidate_list, build_processed_mail_list, build_summary, send_message
+from core.matching import prefilter_candidate
 from core.pipeline_ops import process_candidate
 from core.reporting import build_excel_report
 from core.resume_parser import parse_mail_item
@@ -215,6 +216,9 @@ def main() -> int:
         metrics['durationsMs']['total'] = round((time.perf_counter() - t0) * 1000, 2)
         dump_json(dirs['reports'] / 'last-run-metrics.json', metrics)
         print(msg)
+
+    if not args.dry_run:
+        build_mail_header_index(config['mail'], dirs['state'], limit=200)
 
     return 0
 

@@ -655,6 +655,16 @@ def load_chat_state(runtime_dir: Path) -> dict[str, Any]:
     return {}
 
 
+def load_mail_header_index(runtime_dir: Path) -> dict[str, Any]:
+    index_path = runtime_dir / 'state' / 'mail-header-index.json'
+    if index_path.exists():
+        try:
+            return load_json(index_path)
+        except Exception:
+            return {}
+    return {}
+
+
 
 def save_chat_state(runtime_dir: Path, data: dict[str, Any]) -> None:
     state_path = runtime_dir / 'state' / 'chat-context.json'
@@ -702,6 +712,20 @@ def extract_candidate_name_from_subject(subject: str) -> str | None:
 
 
 
+def find_in_header_index(index: dict[str, Any], name: str, *, seen: bool | None = None) -> list[dict[str, Any]]:
+    if not index or not index.get('items'):
+        return []
+    key = name.strip().lower()
+    results = []
+    for item in index.get('items', []):
+        candidate_name = str(item.get('candidate_name') or '').lower()
+        subject = str(item.get('subject') or '').lower()
+        if key in candidate_name or key in subject:
+            if seen is None or item.get('seen') == seen:
+                results.append(item)
+    return results[:5]
+
+
 def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     config = load_json(config_path)
     pipeline_cfg = config['pipeline']
@@ -710,6 +734,7 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
     intent = detect_intent(text)
     records = load_processed_candidates(processed_root)
     recent_ref = resolve_recent_candidate_reference(text, runtime_dir)
+    header_index = load_mail_header_index(runtime_dir)
 
     if intent == 'unread':
         unread = list_unread_resumes(config['mail'], processed_root=processed_root)
@@ -943,6 +968,28 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
                     'intent': intent,
                     'data': {'candidate_name': candidate_name, match_label: match_obj, 'ensure': ensure_result},
                     'reply': f"候选人「{candidate_name}」已定位到{scope_text}，但暂时无法完成单条下载处理（状态：{ensure_result.get('status')}）。",
+                }
+
+            index_unread = find_in_header_index(header_index, candidate_name, seen=False)
+            if len(index_unread) == 1:
+                ensure_result = ensure_candidate_local_by_uid(index_unread[0]['uid'], config_path=config_path)
+                return _build_single_candidate_send_reply('indexUnreadMatch', index_unread[0], ensure_result)
+            elif len(index_unread) > 1:
+                return {
+                    'intent': intent,
+                    'data': {'candidate_name': candidate_name, 'indexUnreadMatches': index_unread},
+                    'reply': f"在本地邮件索引（未读）里找到多位候选人「{candidate_name}」，请进一步确认：\n" + '\n'.join([f"- UID {x['uid']}｜{x.get('candidate_name') or x.get('sender')}｜{x.get('subject')}" for x in index_unread]),
+                }
+
+            index_seen = find_in_header_index(header_index, candidate_name, seen=True)
+            if len(index_seen) == 1:
+                ensure_result = ensure_candidate_local_by_uid(index_seen[0]['uid'], config_path=config_path, mark_seen_on_fetch=False)
+                return _build_single_candidate_send_reply('indexSeenMatch', index_seen[0], ensure_result)
+            elif len(index_seen) > 1:
+                return {
+                    'intent': intent,
+                    'data': {'candidate_name': candidate_name, 'indexSeenMatches': index_seen},
+                    'reply': f"在本地邮件索引（已读）里找到多位候选人「{candidate_name}」，请进一步确认：\n" + '\n'.join([f"- UID {x['uid']}｜{x.get('candidate_name') or x.get('sender')}｜{x.get('subject')}" for x in index_seen]),
                 }
 
             unread_matches = []

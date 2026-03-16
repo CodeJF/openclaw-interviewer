@@ -30,6 +30,23 @@ def save_state(state_path: Path, state: dict) -> None:
     dump_json(state_path, state)
 
 
+def send_to_targets(targets: list[str], account: str, message: str, media: str | None = None) -> list[dict]:
+    """Send message (and optional media) to multiple Feishu targets."""
+    results = []
+    for target in targets:
+        try:
+            if media:
+                text_send = send_message('feishu', account, target, message)
+                file_send = send_message('feishu', account, target, '', media=media)
+                results.append({'target': target, 'text': text_send, 'file': file_send})
+            else:
+                text_send = send_message('feishu', account, target, message)
+                results.append({'target': target, 'text': text_send})
+        except Exception as e:
+            results.append({'target': target, 'error': str(e)})
+    return results
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default=str(DEFAULT_CONFIG))
@@ -37,6 +54,9 @@ def main() -> int:
     args = parser.parse_args()
 
     config = load_json(Path(args.config))
+    feishu_cfg = config['feishu']
+    targets = feishu_cfg.get('targetIds', [feishu_cfg.get('targetId')])
+    targets = [t for t in targets if t]  # filter out None
     runtime_dir = Path(config['pipeline']['runtimeDir'])
     dirs = ensure_runtime_dirs(runtime_dir)
     state_path = dirs['state'] / 'processed-mail-ids.json'
@@ -178,14 +198,19 @@ def main() -> int:
 如需继续处理下一批，请继续触发。'''
         if not args.dry_run:
             t6 = time.perf_counter()
-            text_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], msg)
-            excel_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], '', media=str(excel_path))
-            file_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], '', media=str(zip_path))
+            send_results = send_to_targets(
+                targets,
+                feishu_cfg['replyAccount'],
+                msg,
+                media=str(excel_path)
+            )
+            # Also send zip file
+            for target in targets:
+                send_message('feishu', feishu_cfg['replyAccount'], target, '', media=str(zip_path))
             metrics['durationsMs']['sendFeishu'] = round((time.perf_counter() - t6) * 1000, 2)
             metrics['messageSend'] = {
-                'text': text_send,
-                'excel': excel_send,
-                'file': file_send,
+                'excel': send_results,
+                'zip': 'sent to all targets',
             }
         else:
             metrics['durationsMs']['sendFeishu'] = 0
@@ -205,10 +230,10 @@ def main() -> int:
 如需继续处理下一批，请继续触发。'''
         if not args.dry_run:
             t6 = time.perf_counter()
-            text_send = send_message('feishu', config['feishu']['replyAccount'], config['feishu']['targetId'], msg)
+            send_results = send_to_targets(targets, feishu_cfg['replyAccount'], msg)
             metrics['durationsMs']['sendFeishu'] = round((time.perf_counter() - t6) * 1000, 2)
             metrics['messageSend'] = {
-                'text': text_send,
+                'text': send_results,
             }
         else:
             metrics['durationsMs']['sendFeishu'] = 0

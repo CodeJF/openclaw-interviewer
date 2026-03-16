@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import email.utils
+import json
 from email.message import Message
 from pathlib import Path
 
@@ -96,23 +97,27 @@ def parse_mail_item(uid: str, msg: Message, incoming_dir: Path, cache_dir: Path 
 
     cache_path = (cache_dir / f'{uid}.json') if cache_dir else None
     if cache_path and cache_path.exists():
-        cached = load_json(cache_path)
-        attachments = [Path(p) for p in cached.get('attachments', [])]
-        all_files = [Path(p) for p in cached.get('all_files', [])]
-        candidate_text = str(cached.get('candidate_text') or '')
-        documents = list(cached.get('documents', []))
-        if candidate_text:
-            return ParsedCandidate(
-                uid=uid,
-                sender=sender,
-                subject=subject,
-                candidate_name=candidate_name,
-                mail_dir=mail_dir,
-                attachments=attachments,
-                all_files=all_files,
-                candidate_text=candidate_text,
-                documents=documents,
-            )
+        try:
+            cached = load_json(cache_path)
+            attachments = [Path(p) for p in cached.get('attachments', [])]
+            all_files = [Path(p) for p in cached.get('all_files', [])]
+            candidate_text = str(cached.get('candidate_text') or '')
+            documents = list(cached.get('documents', []))
+            if candidate_text:
+                return ParsedCandidate(
+                    uid=uid,
+                    sender=sender,
+                    subject=subject,
+                    candidate_name=candidate_name,
+                    mail_dir=mail_dir,
+                    attachments=attachments,
+                    all_files=all_files,
+                    candidate_text=candidate_text,
+                    documents=documents,
+                )
+        except (json.JSONDecodeError, Exception):
+            # 缓存文件损坏，忽略并重新解析
+            pass
 
     attachments = extract_attachments(msg, raw_dir)
     if not attachments:

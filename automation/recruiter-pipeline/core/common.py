@@ -12,7 +12,11 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def dump_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    # 清理无法用 UTF-8 编码的字符（surrogates）
+    json_str = json.dumps(data, ensure_ascii=False, indent=2)
+    # 移除无法编码的字符
+    json_str = json_str.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+    path.write_text(json_str, encoding='utf-8')
 
 
 def sanitize_filename(name: str, fallback: str = 'item') -> str:

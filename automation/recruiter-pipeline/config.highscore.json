@@ -1,0 +1,33 @@
+{
+  "llm": {
+      "apiKey": "sk-cp-PuDcKxmM3Qgy5Szfy4R2L03J1h2YHrzKTuROr5eAtJry8YAOrFHM4llV_i_XDFGDdWcetyRpv-ma4PixjK3bG0b4JWLZ87qyM89iEbjkTrQzpw_kQBpYvVE"
+    },
+  "mail": {
+    "host": "imap.263.net",
+    "port": 143,
+    "ssl": false,
+    "username": "resume@hichs.com.cn",
+    "password": "d1e1fA6640341165"
+  },
+  "feishu": {
+    "replyAccount": "interviewer",
+    "targetType": "dm",
+    "targetIds": [
+      "ou_7e908383e5123fb27c79206ae22ba5d1",
+      "ou_5e90692b21a106ba3c8bb53355f365ab"
+    ]
+  },
+  "pipeline": {
+    "jdDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/JD",
+    "runtimeDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/automation/recruiter-pipeline/runtime",
+    "maxEmailsPerRun": 50,
+    "parallelParseJobs": 4,
+    "parallelLLMJobs": 10,
+    "llmTopKPerResume": 1,
+    "minLLMScore": 90,
+    "maxEmailsLimit": 50,
+    "scoreBands": [
+      { "name": "90-99", "min": 90, "max": 99 }
+    ]
+  }
+}

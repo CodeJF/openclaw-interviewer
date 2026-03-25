@@ -14,10 +14,20 @@
   "bitable": {
     "enabled": false,
     "account": "interviewer",
-    "appToken": "AZjKbIs0YaQ05XsKReMcfqIqnkb",
-    "tableId": "tblKYEpGAuMUDJ52",
     "uniqueField": "邮件UID",
-    "sourceTask": "recruiter-pipeline"
+    "sourceTask": "recruiter-pipeline",
+    "initialization": {
+      "mode": "automationManaged",
+      "appName": "Recruiter Pipeline",
+      "tableName": "Candidates",
+      "folderToken": "",
+      "statePath": "/Users/jianfengxu/.openclaw/workspace-interviewer/automation/recruiter-pipeline/runtime/state/bitable-managed.json",
+      "allowCreateApp": true,
+      "allowCreateTable": true,
+      "allowCreateFields": true,
+      "appToken": "",
+      "tableId": ""
+    }
   },
   "pipeline": {
     "jdDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/JD",

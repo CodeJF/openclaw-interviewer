@@ -10,7 +10,9 @@
 6. LLM 默认并发为 2（可配置），避免串行逐封等待过久
 7. 每个候选人的 interviewer 调用都使用独立短会话，避免共享长上下文越跑越慢
 8. 预筛阈值默认收紧到 42，且多数岗位要求至少命中 2 个 must 词，尽量把明显不匹配的简历挡在 LLM 之前
-9. 通过名单会额外生成一份带样式的 Excel 报告（含手机号/邮箱/年限/附件/建议），并发送给飞书用户
+9. 所有候选人都会产出统一结构化评估结果；通过候选人默认继续归档本地材料
+10. 通过名单会额外生成一份带样式的 Excel 报告（含手机号/邮箱/年限/附件/建议），并发送给飞书用户
+11. 可选同步到飞书多维表，按邮件 UID 做 upsert，覆盖通过与未通过候选人
 6. 解析结果写入 `runtime/cache/parsed/`，重跑时复用，减少重复 PDF 提取
 7. 简历与 JD 内容会先裁剪再送模型，降低单次推理耗时
 8. 仅接受 `MiniMax-M2.5` 结果，拒绝 OpenAI Codex fallback
@@ -35,6 +37,7 @@
 - `core/matching.py`: Phase 1 规则/关键词预筛
 - `core/reviewer.py`: MiniMax highspeed 精筛
 - `core/notifier.py`: 通过 OpenClaw 发送消息
+- `core/bitable.py`: 飞书多维表 upsert 同步
 - `core/io_ops.py`: 运行时目录、打包等
 - `core/query_ops.py`: 招聘查询/执行能力（岗位候选人、未读简历、最近结果、继续处理）
 
@@ -45,6 +48,16 @@ bash automation/recruiter-pipeline/run_pipeline.sh
 ```
 
 当前本地测试批次已调整为 20 封/轮。
+
+## Config
+
+- `pipeline.outputs.archivePassed`: 是否归档通过候选人的本地材料，默认 `true`
+- `pipeline.outputs.excelReport`: 是否生成 Excel，默认 `true`
+- `pipeline.outputs.zipPackage`: 是否生成 ZIP，默认 `true`
+- `pipeline.outputs.notifyFeishu`: 是否发送飞书通知，默认 `true`
+- `bitable.enabled`: 是否同步到飞书多维表，默认 `false`
+- `bitable.appToken` / `bitable.tableId`: 目标多维表配置
+- `bitable.uniqueField`: 用于 upsert 的唯一字段，默认 `邮件UID`
 
 ## Dry run
 

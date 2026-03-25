@@ -42,13 +42,31 @@ class ParsedCandidate:
 @dataclass
 class CandidateResult:
     mail_uid: str
+    candidate_key: str
     sender: str
     subject: str
     matched_jd_title: str
     score: int
-    band: str
+    band: str | None
+    passed: bool
+    fail_reason: str
+    prefilter_passed: bool
     candidate_name: str
+    resume_filename: str
+    phone: str
+    email: str
+    years_of_experience: str
     summary: str
     recommendation: str
+    processed_at: str
+    updated_at: str
+    source_task: str
+    status: str
+    notified: bool
+    notes: str
+    archive_dir: str
+    raw_attachment_paths: list[str]
+    evaluation_json: str
     raw_result: dict[str, Any]
-    work_dir: Path
+    evaluation_path: Path
+    work_dir: Path | None

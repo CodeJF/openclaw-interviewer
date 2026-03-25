@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +16,13 @@ from .models import CandidateResult, ParsedCandidate
 from .resume_parser import parse_mail_item
 from .reviewer import build_prompt, call_interviewer
 
+MOBILE_PATTERNS = [
+    re.compile(r'(?<!\d)(1[3-9]\d{9})(?!\d)'),
+    re.compile(r'(?<!\d)(?:86[- ]?)?(1[3-9]\d{9})(?!\d)'),
+]
+EMAIL_PATTERN = re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}')
+YEARS_PATTERN = re.compile(r'(\d+)\s*年')
+
 
 def load_pipeline_context(config_path: Path = DEFAULT_CONFIG) -> tuple[dict[str, Any], dict[str, Path], list[Any], list[dict[str, Any]], int, int]:
     config = load_json(config_path)
@@ -26,8 +35,83 @@ def load_pipeline_context(config_path: Path = DEFAULT_CONFIG) -> tuple[dict[str,
     return config, dirs, jds, bands, llm_top_k, min_llm_score
 
 
+def _find_mobile(text: str) -> str:
+    for pattern in MOBILE_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return match.group(1)
+    return ''
+
+
+def _find_email(text: str) -> str:
+    match = EMAIL_PATTERN.search(text)
+    return match.group(0) if match else ''
+
+
+def _find_years(text: str) -> str:
+    years = [int(x) for x in YEARS_PATTERN.findall(text)]
+    return str(max(years)) if years else ''
+
+
+def _primary_resume_filename(candidate: ParsedCandidate) -> str:
+    if candidate.documents:
+        file_name = str(candidate.documents[0].get('file') or '').strip()
+        if file_name:
+            return file_name
+    if candidate.attachments:
+        return candidate.attachments[0].name
+    return ''
+
+
+def _build_candidate_result(
+    candidate: ParsedCandidate,
+    eval_result: dict[str, Any],
+    *,
+    evaluation_path: Path,
+    processed_at: str | None = None,
+    source_task: str = 'recruiter-pipeline',
+    work_dir: Path | None = None,
+) -> CandidateResult:
+    now = processed_at or datetime.now().isoformat()
+    candidate_name = sanitize_filename(str(eval_result.get('candidate_name') or candidate.candidate_name), candidate.uid)
+    material = candidate.candidate_text
+    passed = bool(eval_result.get('passed'))
+    return CandidateResult(
+        mail_uid=candidate.uid,
+        candidate_key=candidate.uid,
+        sender=candidate.sender,
+        subject=candidate.subject,
+        matched_jd_title=str(eval_result.get('matched_jd_title') or '').strip(),
+        score=int(eval_result.get('score') or 0),
+        band=str(eval_result['band']) if eval_result.get('band') else None,
+        passed=passed,
+        fail_reason=str(eval_result.get('reason') or ''),
+        prefilter_passed=bool((eval_result.get('prefilter') or {}).get('should_review')),
+        candidate_name=candidate_name,
+        resume_filename=_primary_resume_filename(candidate),
+        phone=_find_mobile(material),
+        email=_find_email(material),
+        years_of_experience=_find_years(material),
+        summary=str(eval_result.get('summary') or '').strip(),
+        recommendation=str(eval_result.get('recommendation') or '').strip(),
+        processed_at=now,
+        updated_at=now,
+        source_task=source_task,
+        status='passed' if passed else 'rejected',
+        notified=False,
+        notes='',
+        archive_dir=str(work_dir) if work_dir else '',
+        raw_attachment_paths=[str(p) for p in candidate.attachments],
+        evaluation_json=json.dumps(eval_result, ensure_ascii=False),
+        raw_result=eval_result,
+        evaluation_path=evaluation_path,
+        work_dir=work_dir,
+    )
+
 
 def evaluate_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, bands, *, llm_top_k: int, min_llm_score: int) -> dict[str, Any]:
+    review_dir = dirs['reports'] / 'single-evaluations'
+    review_dir.mkdir(parents=True, exist_ok=True)
     shortlist_jds, prefilter_meta = prefilter_candidate(candidate, jds, top_k=llm_top_k, min_llm_score=min_llm_score)
     if not prefilter_meta.get('should_review'):
         prefilter_dir = dirs['reports'] / 'prefilter-skipped'
@@ -40,6 +124,7 @@ def evaluate_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, b
             'prefilter': prefilter_meta,
             'passed': False,
             'reason': 'prefilter-skipped',
+            'prefilter_passed': False,
             'matched_jd_title': prefilter_meta.get('top_jds', ['未命中岗位'])[0] if prefilter_meta.get('top_jds') else '未命中岗位',
             'score': 0,
             'band': None,
@@ -47,6 +132,7 @@ def evaluate_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, b
             'recommendation': '当前不建议推进，除非人工认为该候选人值得特殊复核。',
         }
         dump_json(prefilter_dir / f'{candidate.uid}.json', payload)
+        dump_json(review_dir / f'{candidate.uid}.json', payload)
         return payload
 
     prompt = build_prompt(candidate, shortlist_jds, prefilter_meta)
@@ -67,57 +153,62 @@ def evaluate_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, b
         'band': band,
         'passed': passed,
         'prefilter': prefilter_meta,
+        'prefilter_passed': True,
         'reason': 'passed' if passed else 'score-out-of-band',
     })
 
-    review_dir = dirs['reports'] / 'single-evaluations'
-    review_dir.mkdir(parents=True, exist_ok=True)
     dump_json(review_dir / f'{candidate.uid}.json', eval_result)
     return eval_result
 
 
+def archive_candidate_result(candidate: ParsedCandidate, dirs: dict[str, Path], result: CandidateResult) -> CandidateResult:
+    if not result.passed:
+        return result
 
-def process_candidate(candidate: ParsedCandidate, dirs: dict[str, Path], jds, bands, *, llm_top_k: int, min_llm_score: int, evaluation: dict[str, Any] | None = None) -> CandidateResult | None:
-    eval_result = evaluation or evaluate_candidate(candidate, dirs, jds, bands, llm_top_k=llm_top_k, min_llm_score=min_llm_score)
-    if not eval_result.get('passed'):
-        return None
-
-    jd_title = str(eval_result['matched_jd_title']).strip()
-    summary = str(eval_result.get('summary') or '').strip()
-    recommendation = str(eval_result.get('recommendation') or '').strip()
-    candidate_name = sanitize_filename(str(eval_result.get('candidate_name') or candidate.candidate_name), candidate.uid)
-    band = str(eval_result['band'])
-    score = int(eval_result['score'])
-
-    work_dir = dirs['processed'] / datetime.now().strftime('%Y-%m-%d') / sanitize_filename(jd_title) / band / candidate_name
+    band = result.band or 'unbanded'
+    work_dir = dirs['processed'] / datetime.now().strftime('%Y-%m-%d') / sanitize_filename(result.matched_jd_title) / band / result.candidate_name
     work_dir.mkdir(parents=True, exist_ok=True)
-    dump_json(work_dir / 'result.json', eval_result)
+    dump_json(work_dir / 'result.json', result.raw_result)
     dump_json(work_dir / 'mail.json', {
         'uid': candidate.uid,
         'subject': candidate.subject,
         'sender': candidate.sender,
         'documents': candidate.documents,
-        'prefilter': eval_result.get('prefilter', {}),
+        'prefilter': result.raw_result.get('prefilter', {}),
     })
     (work_dir / 'candidate_material.txt').write_text(candidate.candidate_text, encoding='utf-8')
     for attachment in candidate.attachments:
         if attachment.exists():
             shutil.copy2(attachment, work_dir / attachment.name)
 
-    return CandidateResult(
-        mail_uid=candidate.uid,
-        sender=candidate.sender,
-        subject=candidate.subject,
-        matched_jd_title=jd_title,
-        score=score,
-        band=band,
-        candidate_name=candidate_name,
-        summary=summary,
-        recommendation=recommendation,
-        raw_result=eval_result,
-        work_dir=work_dir,
-    )
+    result.work_dir = work_dir
+    result.archive_dir = str(work_dir)
+    return result
 
+
+def process_candidate(
+    candidate: ParsedCandidate,
+    dirs: dict[str, Path],
+    jds,
+    bands,
+    *,
+    llm_top_k: int,
+    min_llm_score: int,
+    evaluation: dict[str, Any] | None = None,
+    archive_passed: bool = True,
+    source_task: str = 'recruiter-pipeline',
+) -> CandidateResult:
+    eval_result = evaluation or evaluate_candidate(candidate, dirs, jds, bands, llm_top_k=llm_top_k, min_llm_score=min_llm_score)
+    evaluation_path = dirs['reports'] / 'single-evaluations' / f'{candidate.uid}.json'
+    result = _build_candidate_result(
+        candidate,
+        eval_result,
+        evaluation_path=evaluation_path,
+        source_task=source_task,
+    )
+    if archive_passed:
+        result = archive_candidate_result(candidate, dirs, result)
+    return result
 
 
 def find_processed_result_by_uid(processed_root: Path, uid: str) -> Path | None:
@@ -153,12 +244,12 @@ def ensure_candidate_local_by_uid(uid: str, *, config_path: Path = DEFAULT_CONFI
                 ensure_seen(config['mail'], uid, client)
             except Exception:
                 pass
-        if eval_result.get('passed'):
-            result = process_candidate(candidate, dirs, jds, bands, llm_top_k=llm_top_k, min_llm_score=min_llm_score, evaluation=eval_result)
+        result = process_candidate(candidate, dirs, jds, bands, llm_top_k=llm_top_k, min_llm_score=min_llm_score, evaluation=eval_result)
+        if result.passed:
             return {
                 'status': 'processed',
                 'uid': uid,
-                'workDir': str(result.work_dir) if result else None,
+                'workDir': str(result.work_dir) if result.work_dir else None,
                 'attachments': [str(p) for p in candidate.attachments],
                 'allFiles': [str(p) for p in candidate.all_files],
                 'evaluation': eval_result,

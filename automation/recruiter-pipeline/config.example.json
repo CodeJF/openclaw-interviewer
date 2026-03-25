@@ -11,6 +11,14 @@
     "targetType": "dm",
     "targetId": "ou_xxx"
   },
+  "bitable": {
+    "enabled": false,
+    "account": "interviewer",
+    "appToken": "AZjKbIs0YaQ05XsKReMcfqIqnkb",
+    "tableId": "tblKYEpGAuMUDJ52",
+    "uniqueField": "邮件UID",
+    "sourceTask": "recruiter-pipeline"
+  },
   "pipeline": {
     "jdDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/JD",
     "runtimeDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/automation/recruiter-pipeline/runtime",
@@ -22,6 +30,12 @@
     "maxCandidateCharsForReview": 12000,
     "onlyUseModel": "MiniMax-M2.5",
     "allowFallback": false,
+    "outputs": {
+      "archivePassed": true,
+      "excelReport": true,
+      "zipPackage": true,
+      "notifyFeishu": true
+    },
     "scoreBands": [
       { "name": "80-89", "min": 80, "max": 89 },
       { "name": "90-99", "min": 90, "max": 99 }

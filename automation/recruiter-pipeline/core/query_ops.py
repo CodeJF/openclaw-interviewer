@@ -1094,7 +1094,7 @@ def handle_query(text: str, *, config_path: Path) -> dict[str, Any]:
 
     if intent == 'run':
         limit = parse_limit(text, default=int(pipeline_cfg.get('maxEmailsPerRun', 20) or 20))
-        result = run_pipeline_batch(Path('/Users/jianfengxu/.openclaw/workspace-interviewer/automation/recruiter-pipeline/run_pipeline.sh'))
+        result = run_pipeline_batch(Path(__file__).resolve().parent.parent / 'run_pipeline.sh')
         status = '成功' if result['returncode'] == 0 else '失败'
         return {
             'intent': intent,

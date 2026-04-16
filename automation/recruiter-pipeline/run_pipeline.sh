@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
-cd /Users/jianfengxu/.openclaw/workspace-interviewer
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$WORKSPACE_DIR"
 if [ ! -x automation/recruiter-pipeline/.venv/bin/python ]; then
   python3 -m venv automation/recruiter-pipeline/.venv
 fi

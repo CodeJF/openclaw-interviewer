@@ -1,7 +1,7 @@
 {
   "llm": {
-      "apiKey": "sk-cp-PuDcKxmM3Qgy5Szfy4R2L03J1h2YHrzKTuROr5eAtJry8YAOrFHM4llV_i_XDFGDdWcetyRpv-ma4PixjK3bG0b4JWLZ87qyM89iEbjkTrQzpw_kQBpYvVE"
-    },
+    "apiKey": "sk-cp-PuDcKxmM3Qgy5Szfy4R2L03J1h2YHrzKTuROr5eAtJry8YAOrFHM4llV_i_XDFGDdWcetyRpv-ma4PixjK3bG0b4JWLZ87qyM89iEbjkTrQzpw_kQBpYvVE"
+  },
   "mail": {
     "host": "imap.263.net",
     "port": 143,
@@ -18,8 +18,8 @@
     ]
   },
   "pipeline": {
-    "jdDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/JD",
-    "runtimeDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/automation/recruiter-pipeline/runtime",
+    "jdDir": "../../JD",
+    "runtimeDir": "./runtime",
     "maxEmailsPerRun": 50,
     "parallelParseJobs": 4,
     "parallelLLMJobs": 10,
@@ -27,7 +27,11 @@
     "minLLMScore": 90,
     "maxEmailsLimit": 50,
     "scoreBands": [
-      { "name": "90-99", "min": 90, "max": 99 }
+      {
+        "name": "90-99",
+        "min": 90,
+        "max": 99
+      }
     ]
   }
 }

@@ -12,12 +12,20 @@
     "targetId": "ou_7e908383e5123fb27c79206ae22ba5d1"
   },
   "pipeline": {
-    "jdDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/JD",
-    "runtimeDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/automation/recruiter-pipeline/runtime",
+    "jdDir": "../../JD",
+    "runtimeDir": "./runtime",
     "maxEmailsPerRun": 20,
     "scoreBands": [
-      { "name": "80-89", "min": 80, "max": 89 },
-      { "name": "90-99", "min": 90, "max": 99 }
+      {
+        "name": "80-89",
+        "min": 80,
+        "max": 89
+      },
+      {
+        "name": "90-99",
+        "min": 90,
+        "max": 99
+      }
     ]
   }
 }

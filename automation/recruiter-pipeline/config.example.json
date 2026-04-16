@@ -21,7 +21,7 @@
       "appName": "Recruiter Pipeline",
       "tableName": "Candidates",
       "folderToken": "",
-      "statePath": "/Users/jianfengxu/.openclaw/workspace-interviewer/automation/recruiter-pipeline/runtime/state/bitable-managed.json",
+      "statePath": "./runtime/state/bitable-managed.json",
       "allowCreateApp": true,
       "allowCreateTable": true,
       "allowCreateFields": true,
@@ -30,8 +30,8 @@
     }
   },
   "pipeline": {
-    "jdDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/JD",
-    "runtimeDir": "/Users/jianfengxu/.openclaw/workspace-interviewer/automation/recruiter-pipeline/runtime",
+    "jdDir": "../../JD",
+    "runtimeDir": "./runtime",
     "maxEmailsPerRun": 20,
     "parallelParseJobs": 4,
     "parallelLLMJobs": 2,
@@ -47,8 +47,16 @@
       "notifyFeishu": true
     },
     "scoreBands": [
-      { "name": "80-89", "min": 80, "max": 89 },
-      { "name": "90-99", "min": 90, "max": 99 }
+      {
+        "name": "80-89",
+        "min": 80,
+        "max": 89
+      },
+      {
+        "name": "90-99",
+        "min": 90,
+        "max": 99
+      }
     ]
   }
 }

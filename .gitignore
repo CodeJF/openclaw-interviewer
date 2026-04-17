@@ -5,3 +5,8 @@ automation/*.tar.gz
 automation/**/*.tar.gz
 candidates/*
 !candidates/.gitkeep
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/config.local.json
+**/config.local.json.bak

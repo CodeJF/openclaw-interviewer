@@ -1,0 +1,69 @@
+{
+  "llm": {
+    "apiKey": "sk-cp-PuDcKxmM3Qgy5Szfy4R2L03J1h2YHrzKTuROr5eAtJry8YAOrFHM4llV_i_XDFGDdWcetyRpv-ma4PixjK3bG0b4JWLZ87qyM89iEbjkTrQzpw_kQBpYvVE"
+  },
+  "mail": {
+    "host": "imap.263.net",
+    "port": 143,
+    "ssl": false,
+    "username": "resume@hichs.com.cn",
+    "password": "d1e1fA6640341165"
+  },
+  "feishu": {
+    "replyAccount": "interviewer",
+    "targetType": "dm",
+    "targetId": "ou_7e908383e5123fb27c79206ae22ba5d1",
+    "targetIds": [
+      "ou_7e908383e5123fb27c79206ae22ba5d1",
+      "ou_5e90692b21a106ba3c8bb53355f365ab",
+      "ou_e404e38925a5956783c873924898577e"
+    ]
+  },
+  "pipeline": {
+    "jdDir": "../../JD",
+    "runtimeDir": "./runtime",
+    "maxEmailsPerRun": 50,
+    "parallelParseJobs": 4,
+    "parallelLLMJobs": 10,
+    "llmTopKPerResume": 1,
+    "minLLMScore": 80,
+    "maxEmailsLimit": 50,
+    "scoreBands": [
+      {
+        "name": "80-89",
+        "min": 80,
+        "max": 89
+      },
+      {
+        "name": "90-99",
+        "min": 90,
+        "max": 99
+      }
+    ],
+    "outputs": {
+      "archivePassed": true,
+      "excelReport": true,
+      "zipPackage": true,
+      "notifyFeishu": true
+    }
+  },
+  "bitable": {
+    "enabled": false,
+    "account": "interviewer",
+    "appToken": "",
+    "tableId": "",
+    "uniqueField": "邮件UID",
+    "sourceTask": "recruiter-pipeline",
+    "initialization": {
+      "mode": "manual",
+      "appName": "Recruiter Pipeline Automation",
+      "tableName": "Candidates",
+      "allowCreateApp": true,
+      "allowCreateTable": true,
+      "allowCreateFields": true,
+      "appToken": "",
+      "tableId": "",
+      "statePath": "./runtime/state/bitable-managed.json"
+    }
+  }
+}
